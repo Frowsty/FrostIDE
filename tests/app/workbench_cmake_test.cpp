@@ -1000,4 +1000,82 @@ TEST(WorkbenchCMake, TheTargetsTabOutlivesItsIntegrationInertAndNeverStillRunnin
     QApplication::processEvents();
     EXPECT_TRUE(runs->activeRuns().empty());
 }
+TEST(WorkbenchCMake, ConfiguredMembershipEditsRequirePreviewAndPreserveDirtySources) {
+    WorkDir dir("rename-delete-cmake-members");
+    WorkbenchRig rig(dir);
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsCmakePath,
+                                  std::string(FROST_TEST_CMAKE)));
+    rig.show();
+    rig.prompts.cmakeEditAnswer = true;
+
+    auto created = rig.workbench->createNewProject({
+        .name = "CMakeRenameDemo",
+        .location = dir.path(),
+        .kind = frost::app::NewProjectTemplate::CMakeExecutable,
+    });
+    ASSERT_TRUE(created.has_value()) << created.error().describe();
+    auto* service = rig.workbench->cmakeService();
+    ASSERT_NE(service, nullptr);
+    const auto waitForModel = [&] {
+        return waitFor(
+            [&] { return rig.workbench->cmakeTargetsCurrent() && service->state() == frost::build::BuildState::Idle; },
+            std::chrono::seconds(60));
+    };
+    ASSERT_TRUE(waitForModel());
+    const std::string mainCpp = dir.join("CMakeRenameDemo/main.cpp");
+    const std::string entryCpp = dir.join("CMakeRenameDemo/entry.cpp");
+    ASSERT_NE(rig.workbench->currentView(), nullptr);
+    EXPECT_EQ(rig.workbench->currentView()->path(), mainCpp);
+    ASSERT_TRUE(rig.workbench->currentView()->editor().typeText("// dirty edit\n"));
+    EXPECT_TRUE(rig.workbench->currentView()->document().dirty());
+
+    auto renamed = rig.workbench->renameItem(mainCpp, "entry.cpp");
+    ASSERT_TRUE(renamed.has_value()) << renamed.error().describe();
+    EXPECT_EQ(*renamed, entryCpp);
+    EXPECT_FALSE(frost::io::realFileSystem().exists(mainCpp).value_or(true));
+    EXPECT_TRUE(frost::io::realFileSystem().exists(entryCpp).value_or(false));
+    ASSERT_NE(rig.workbench->currentView(), nullptr);
+    EXPECT_EQ(rig.workbench->currentView()->path(), entryCpp);
+    EXPECT_TRUE(rig.workbench->currentView()->document().dirty());
+    EXPECT_TRUE(
+        rig.workbench->currentView()->document().document().committedText().text().starts_with("// dirty edit\n"));
+    const std::string cmakeLists = dir.read("CMakeRenameDemo/CMakeLists.txt");
+    EXPECT_EQ(rig.prompts.cmakeEditPrompts, 1U);
+    EXPECT_EQ(cmakeLists, rig.prompts.lastCMakeEditAfter);
+    EXPECT_TRUE(cmakeLists.contains("entry.cpp")) << cmakeLists;
+    EXPECT_FALSE(cmakeLists.contains("main.cpp")) << cmakeLists;
+
+    // Add a second file, add to CMakeLists.txt, then delete it: closes tab without discard prompt and removes from
+    // CMakeLists.txt.
+    auto helper = rig.workbench->createNewFile("", "helper.cpp");
+    ASSERT_TRUE(helper.has_value()) << helper.error().describe();
+    ASSERT_TRUE(rig.workbench->addSourceToCMakeLists(*helper).has_value());
+    EXPECT_TRUE(dir.read("CMakeRenameDemo/CMakeLists.txt").contains("helper.cpp"));
+    ASSERT_TRUE(rig.workbench->currentView()->editor().typeText("// unsaved helper\n"));
+    const int discardBefore = rig.prompts.discardCalls;
+    auto deleted = rig.workbench->deleteItem(*helper);
+    ASSERT_TRUE(deleted.has_value()) << deleted.error().describe();
+    EXPECT_EQ(rig.prompts.discardCalls, discardBefore);
+    EXPECT_FALSE(frost::io::realFileSystem().exists(*helper).value_or(true));
+    EXPECT_FALSE(dir.read("CMakeRenameDemo/CMakeLists.txt").contains("helper.cpp"));
+    EXPECT_EQ(rig.prompts.cmakeEditPrompts, 3U); // Add and remove were previewed too.
+
+    // Declining the project edit cancels the whole transaction.
+    ASSERT_TRUE(service->configure());
+    ASSERT_TRUE(waitForModel());
+    rig.prompts.cmakeEditAnswer = false;
+    const std::string listsBefore = dir.read("CMakeRenameDemo/CMakeLists.txt");
+    auto declined = rig.workbench->renameItem(entryCpp, "start.cpp");
+    ASSERT_FALSE(declined.has_value());
+    EXPECT_EQ(declined.error().code(), frost::ErrorCode::Cancelled);
+    EXPECT_EQ(rig.prompts.cmakeEditPrompts, 4U);
+    EXPECT_TRUE(frost::io::realFileSystem().exists(entryCpp).value_or(false));
+    EXPECT_FALSE(frost::io::realFileSystem().exists(dir.join("CMakeRenameDemo/start.cpp")).value_or(true));
+    EXPECT_EQ(dir.read("CMakeRenameDemo/CMakeLists.txt"), listsBefore);
+    // Save entry.cpp so the project can close cleanly for the next subtest.
+    ASSERT_NE(rig.workbench->currentView(), nullptr);
+    ASSERT_TRUE(rig.workbench->documents().save(rig.workbench->currentView()->document()).has_value());
+}
+
 } // namespace

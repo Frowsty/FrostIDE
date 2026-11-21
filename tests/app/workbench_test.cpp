@@ -1909,82 +1909,18 @@ TEST(Workbench, NewProjectSupportsVisualStudioCppLibrariesAndDotNetTemplates) {
     }
 }
 
-TEST(Workbench, RenameMoveAndDeleteEditCMakeListsOnlyAfterAPreviewAndNeverMsBuildProjects) {
-    WorkDir dir("rename-delete-project-items");
+TEST(Workbench, SolutionEditsRespectThePlatformAndProjectMembership) {
+    WorkDir dir("rename-delete-solution-items");
     WorkbenchRig rig(dir);
     rig.show();
-    rig.prompts.cmakeEditAnswer = true; // Part 1 applies the previewed CMakeLists.txt edits.
     const auto lastNotice = [&]() -> const frost::ui::Notification& {
         return rig.window->notifications().log().back().notification;
     };
 
-    // 1. CMake project: rename dirty main.cpp -> entry.cpp updates CMakeLists.txt and preserves dirty tab.
-    {
-        auto created = rig.workbench->createNewProject({
-            .name = "CMakeRenameDemo",
-            .location = dir.path(),
-            .kind = frost::app::NewProjectTemplate::CMakeExecutable,
-        });
-        ASSERT_TRUE(created.has_value()) << created.error().describe();
-        const std::string mainCpp = dir.join("CMakeRenameDemo/main.cpp");
-        const std::string entryCpp = dir.join("CMakeRenameDemo/entry.cpp");
-        ASSERT_NE(rig.workbench->currentView(), nullptr);
-        EXPECT_EQ(rig.workbench->currentView()->path(), mainCpp);
-        ASSERT_TRUE(rig.workbench->currentView()->editor().typeText("// dirty edit\n"));
-        EXPECT_TRUE(rig.workbench->currentView()->document().dirty());
-
-        auto renamed = rig.workbench->renameItem(mainCpp, "entry.cpp");
-        ASSERT_TRUE(renamed.has_value()) << renamed.error().describe();
-        EXPECT_EQ(*renamed, entryCpp);
-        EXPECT_FALSE(frost::io::realFileSystem().exists(mainCpp).value_or(true));
-        EXPECT_TRUE(frost::io::realFileSystem().exists(entryCpp).value_or(false));
-        ASSERT_NE(rig.workbench->currentView(), nullptr);
-        EXPECT_EQ(rig.workbench->currentView()->path(), entryCpp);
-        EXPECT_TRUE(rig.workbench->currentView()->document().dirty());
-        EXPECT_TRUE(
-            rig.workbench->currentView()->document().document().committedText().text().starts_with("// dirty edit\n"));
-        const std::string cmakeLists = dir.read("CMakeRenameDemo/CMakeLists.txt");
-        EXPECT_EQ(rig.prompts.cmakeEditPrompts, 1U);
-        EXPECT_EQ(cmakeLists, rig.prompts.lastCMakeEditAfter);
-        EXPECT_TRUE(cmakeLists.contains("entry.cpp")) << cmakeLists;
-        EXPECT_FALSE(cmakeLists.contains("main.cpp")) << cmakeLists;
-
-        // Add a second file, add to CMakeLists.txt, then delete it: closes tab without discard prompt and removes from
-        // CMakeLists.txt.
-        auto helper = rig.workbench->createNewFile("", "helper.cpp");
-        ASSERT_TRUE(helper.has_value()) << helper.error().describe();
-        ASSERT_TRUE(rig.workbench->addSourceToCMakeLists(*helper).has_value());
-        EXPECT_TRUE(dir.read("CMakeRenameDemo/CMakeLists.txt").contains("helper.cpp"));
-        ASSERT_TRUE(rig.workbench->currentView()->editor().typeText("// unsaved helper\n"));
-        const int discardBefore = rig.prompts.discardCalls;
-        auto deleted = rig.workbench->deleteItem(*helper);
-        ASSERT_TRUE(deleted.has_value()) << deleted.error().describe();
-        EXPECT_EQ(rig.prompts.discardCalls, discardBefore);
-        EXPECT_FALSE(frost::io::realFileSystem().exists(*helper).value_or(true));
-        EXPECT_FALSE(dir.read("CMakeRenameDemo/CMakeLists.txt").contains("helper.cpp"));
-        EXPECT_EQ(rig.prompts.cmakeEditPrompts, 3U); // Add and remove were previewed too.
-
-        // Declined: the file is renamed on disk, CMakeLists.txt keeps every byte and the user is told.
-        rig.prompts.cmakeEditAnswer = false;
-        const std::string listsBefore = dir.read("CMakeRenameDemo/CMakeLists.txt");
-        auto declined = rig.workbench->renameItem(entryCpp, "start.cpp");
-        ASSERT_TRUE(declined.has_value()) << declined.error().describe();
-        EXPECT_EQ(rig.prompts.cmakeEditPrompts, 4U);
-        EXPECT_TRUE(frost::io::realFileSystem().exists(dir.join("CMakeRenameDemo/start.cpp")).value_or(false));
-        EXPECT_EQ(dir.read("CMakeRenameDemo/CMakeLists.txt"), listsBefore);
-        EXPECT_EQ(lastNotice().title, QStringLiteral("CMakeLists.txt not changed"));
-        EXPECT_TRUE(lastNotice().text.contains(QStringLiteral("entry.cpp"))) << lastNotice().text.toStdString();
-        // Save start.cpp so the project can close cleanly for the next subtest.
-        ASSERT_NE(rig.workbench->currentView(), nullptr);
-        ASSERT_TRUE(rig.workbench->documents().save(rig.workbench->currentView()->document()).has_value());
-    }
-
     /*
-     * 2. Visual Studio C++ project (.sln + .vcxproj): rename, move and delete happen on disk. This
-     * rig has no ProjectHost helper, so the project edit that would follow (SLN-6; with the real
-     * helper in WorkbenchProjectEdit.RenameAndDeleteUpdateTheProjectThroughProjectHost) cannot
-     * start: .vcxproj and .vcxproj.filters keep every byte and the user is told which still list
-     * the file, and why.
+     * This template's C++ membership needs evaluation. Windows requires trust for that edit.
+     * Linux's read-only solution model refuses the transaction. Deleting the physical file
+     * leaves the project definitions alone and reports their remaining references.
      */
     {
         auto created = rig.workbench->createNewProject({
@@ -1995,51 +1931,55 @@ TEST(Workbench, RenameMoveAndDeleteEditCMakeListsOnlyAfterAPreviewAndNeverMsBuil
         ASSERT_TRUE(created.has_value()) << created.error().describe();
         const std::string vcxprojBefore = dir.read("VsRenameDemo/VsRenameDemo.vcxproj");
         const std::string filtersBefore = dir.read("VsRenameDemo/VsRenameDemo.vcxproj.filters");
-        const auto expectProjectsUntouched = [&](const char* what) {
-            EXPECT_EQ(dir.read("VsRenameDemo/VsRenameDemo.vcxproj"), vcxprojBefore) << what;
-            EXPECT_EQ(dir.read("VsRenameDemo/VsRenameDemo.vcxproj.filters"), filtersBefore) << what;
-            EXPECT_EQ(lastNotice().title, QStringLiteral("Project files not updated")) << what;
-            EXPECT_EQ(lastNotice().kind, frost::ui::NotificationKind::Warning) << what;
-            EXPECT_TRUE(lastNotice().text.contains(QStringLiteral("No project file was changed"))) << what;
-            EXPECT_TRUE(lastNotice().text.contains(QStringLiteral("VsRenameDemo.vcxproj"))) << what;
-        };
         const std::string mainCpp = dir.join("VsRenameDemo/main.cpp");
         const std::string appCpp = dir.join("VsRenameDemo/app.cpp");
+        const std::string mainBefore = dir.read("VsRenameDemo/main.cpp");
         auto renamed = rig.workbench->renameItem(mainCpp, "app.cpp");
-        ASSERT_TRUE(renamed.has_value()) << renamed.error().describe();
-        EXPECT_EQ(*renamed, appCpp);
-        EXPECT_TRUE(frost::io::realFileSystem().exists(appCpp).value_or(false));
-        expectProjectsUntouched("rename");
-        EXPECT_TRUE(lastNotice().text.contains(QStringLiteral("renamed"))) << lastNotice().text.toStdString();
+        ASSERT_FALSE(renamed.has_value());
+#ifdef _WIN32
+        EXPECT_EQ(renamed.error().code(), frost::ErrorCode::PermissionDenied);
+#else
+        EXPECT_EQ(renamed.error().code(), frost::ErrorCode::Unsupported);
+#endif
+        EXPECT_EQ(dir.read("VsRenameDemo/main.cpp"), mainBefore);
+        EXPECT_FALSE(frost::io::realFileSystem().exists(appCpp).value_or(true));
+        EXPECT_EQ(dir.read("VsRenameDemo/VsRenameDemo.vcxproj"), vcxprojBefore);
+        EXPECT_EQ(dir.read("VsRenameDemo/VsRenameDemo.vcxproj.filters"), filtersBefore);
 
-        // The project still lists main.cpp, so moving app.cpp names nothing the project lists: no notice.
-        const auto noticesBefore = rig.window->notifications().log().size();
+        // Even an unlisted file needs permission to move within an open solution.
+        dir.write("VsRenameDemo/app.cpp", mainBefore);
         auto* explorer = rig.workbench->solutionExplorer();
         ASSERT_NE(explorer, nullptr);
         ASSERT_TRUE(frost::io::realFileSystem().createDirectories(dir.join("VsRenameDemo/src")).has_value());
         emit explorer->movePhysicalPathsRequested({QString::fromStdString(appCpp)},
                                                   QString::fromStdString(dir.join("VsRenameDemo/src")), QString());
-        EXPECT_TRUE(frost::io::realFileSystem().exists(dir.join("VsRenameDemo/src/app.cpp")).value_or(false));
-        EXPECT_EQ(rig.window->notifications().log().size(), noticesBefore);
+        EXPECT_TRUE(frost::io::realFileSystem().exists(appCpp).value_or(false));
+        EXPECT_FALSE(frost::io::realFileSystem().exists(dir.join("VsRenameDemo/src/app.cpp")).value_or(true));
         EXPECT_EQ(dir.read("VsRenameDemo/VsRenameDemo.vcxproj"), vcxprojBefore);
+        EXPECT_EQ(dir.read("VsRenameDemo/VsRenameDemo.vcxproj.filters"), filtersBefore);
 
-        // Back to main.cpp, which the project lists: moving it is reported, deleting it too.
-        dir.write("VsRenameDemo/main.cpp", "int main() { return 0; }\n");
-        rig.workbench->checkExternalChanges();
         emit explorer->movePhysicalPathsRequested({QString::fromStdString(mainCpp)},
                                                   QString::fromStdString(dir.join("VsRenameDemo/src")), QString());
-        EXPECT_TRUE(frost::io::realFileSystem().exists(dir.join("VsRenameDemo/src/main.cpp")).value_or(false));
-        expectProjectsUntouched("move");
-        EXPECT_TRUE(lastNotice().text.contains(QStringLiteral("moved"))) << lastNotice().text.toStdString();
-        dir.write("VsRenameDemo/main.cpp", "int main() { return 0; }\n");
-        ASSERT_TRUE(rig.workbench->deleteItem(mainCpp).has_value());
+        EXPECT_TRUE(frost::io::realFileSystem().exists(mainCpp).value_or(false));
+        EXPECT_FALSE(frost::io::realFileSystem().exists(dir.join("VsRenameDemo/src/main.cpp")).value_or(true));
+        EXPECT_EQ(dir.read("VsRenameDemo/VsRenameDemo.vcxproj"), vcxprojBefore);
+        EXPECT_EQ(dir.read("VsRenameDemo/VsRenameDemo.vcxproj.filters"), filtersBefore);
+        const auto noticesBeforeDelete = rig.window->notifications().log().size();
+        ASSERT_TRUE(rig.workbench->deleteItem(mainCpp));
         EXPECT_FALSE(frost::io::realFileSystem().exists(mainCpp).value_or(true));
-        expectProjectsUntouched("delete");
+        EXPECT_EQ(dir.read("VsRenameDemo/VsRenameDemo.vcxproj"), vcxprojBefore);
+        EXPECT_EQ(dir.read("VsRenameDemo/VsRenameDemo.vcxproj.filters"), filtersBefore);
+        ASSERT_GT(rig.window->notifications().log().size(), noticesBeforeDelete);
+        EXPECT_EQ(lastNotice().title, QStringLiteral("Project files not updated"));
+        EXPECT_EQ(lastNotice().kind, frost::ui::NotificationKind::Warning);
+        EXPECT_TRUE(lastNotice().text.contains(QStringLiteral("No project file was changed")));
+        EXPECT_TRUE(lastNotice().text.contains(QStringLiteral("VsRenameDemo.vcxproj")));
         EXPECT_TRUE(lastNotice().text.contains(QStringLiteral("deleted"))) << lastNotice().text.toStdString();
     }
 
-    // 3. C# .slnx/.csproj project: rename Program.cs -> Startup.cs updates SolutionModel hierarchy.
+    // A trusted managed project uses implicit membership when the solution supports edits.
     {
+        ASSERT_TRUE(rig.trust->trust(dir.join("CsRenameDemo")));
         auto created = rig.workbench->createNewProject({
             .name = "CsRenameDemo",
             .location = dir.path(),
@@ -2049,18 +1989,20 @@ TEST(Workbench, RenameMoveAndDeleteEditCMakeListsOnlyAfterAPreviewAndNeverMsBuil
         const std::string programCs = dir.join("CsRenameDemo/Program.cs");
         const std::string startupCs = dir.join("CsRenameDemo/Startup.cs");
         const std::string csprojBefore = dir.read("CsRenameDemo/CsRenameDemo.csproj");
-        const auto noticesBefore = rig.window->notifications().log().size();
         auto renamed = rig.workbench->renameItem(programCs, "Startup.cs");
+#ifdef _WIN32
         ASSERT_TRUE(renamed.has_value()) << renamed.error().describe();
         EXPECT_EQ(*renamed, startupCs);
-        // An SDK-style project includes its folder implicitly: nothing to edit, nothing to report.
-        EXPECT_EQ(dir.read("CsRenameDemo/CsRenameDemo.csproj"), csprojBefore);
-        for (auto i = noticesBefore; i < rig.window->notifications().log().size(); ++i)
-            EXPECT_NE(rig.window->notifications().log()[i].notification.title,
-                      QStringLiteral("Project files not updated"));
         ASSERT_NE(rig.workbench->solution(), nullptr);
         EXPECT_FALSE(rig.workbench->solution()->findFileNode(programCs).has_value());
         EXPECT_TRUE(rig.workbench->solution()->findFileNode(startupCs).has_value());
+#else
+        ASSERT_FALSE(renamed.has_value());
+        EXPECT_EQ(renamed.error().code(), frost::ErrorCode::Unsupported);
+        EXPECT_TRUE(frost::io::realFileSystem().exists(programCs).value_or(false));
+        EXPECT_FALSE(frost::io::realFileSystem().exists(startupCs).value_or(true));
+#endif
+        EXPECT_EQ(dir.read("CsRenameDemo/CsRenameDemo.csproj"), csprojBefore);
     }
 }
 
