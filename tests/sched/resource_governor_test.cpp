@@ -195,11 +195,15 @@ TEST(ResourceGovernorTest, OsPeakRetainsReleasedPagesBeforeFirstGovernorSample) 
     const auto released = frost::sched::queryProcessRssBytes(selfPid());
     ASSERT_TRUE(released.has_value()) << released.error().describe();
     ASSERT_GT(*held, *released + 32ULL * kMiB) << "private pages must leave the resident set before sampling";
+    // Compare with the OS high-water after releasing the mapping. Linux accounts live RSS and
+    // its estimated high-water asynchronously.
+    const auto releasedPeak = frost::sched::queryProcessPeakRssBytes(selfPid());
+    ASSERT_TRUE(releasedPeak.has_value()) << releasedPeak.error().describe();
 
     ResourceGovernor governor;
     const auto sampled = governor.sampleProcessRss(selfPid());
     ASSERT_TRUE(sampled.has_value()) << sampled.error().describe();
-    EXPECT_GE(governor.peakProcessRssBytes(selfPid()), *held);
+    EXPECT_GE(governor.peakProcessRssBytes(selfPid()), *releasedPeak);
     EXPECT_GT(governor.peakProcessRssBytes(selfPid()), *sampled + 32ULL * kMiB);
     EXPECT_EQ(governor.currentProcessRssBytes(selfPid()), *sampled);
     EXPECT_EQ(governor.currentCombinedRssBytes(), *sampled);
