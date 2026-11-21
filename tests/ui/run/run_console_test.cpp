@@ -10,6 +10,7 @@
 #include "frost/input/action.hpp"
 #include "frost/io/scripted_process_launcher.hpp"
 #include "frost/project/trust_store.hpp"
+#include "frost/run/run_manager.hpp"
 #include "frost/ui/run_actions.hpp"
 #include "frost/ui/run_console.hpp"
 #include "frost/ui/run_controller.hpp"
@@ -240,10 +241,23 @@ protected:
         controller->setService(nullptr);
         service.reset();
         controller.reset();
+        nativeRuns.reset();
     }
 
     [[nodiscard]] static std::string programPath(std::string_view name) {
         return MemTree::path(std::format("Run/x64/Debug/{}.exe", name));
+    }
+
+    void selectNativeProgram(std::string_view name) {
+        nativeRuns = run::RunManager::create(launcher);
+        controller->setRunManager(nativeRuns.get());
+        run::RunConfiguration configuration;
+        configuration.id = "native";
+        configuration.name = name;
+        configuration.type = run::RunType::Native;
+        configuration.program = programPath(name);
+        ASSERT_TRUE(controller->replaceConfigurations({configuration}));
+        ASSERT_TRUE(controller->selectConfiguration(configuration.id));
     }
 
     MemTree tree;
@@ -259,6 +273,7 @@ protected:
     bool acceptRerun = false;
     std::unique_ptr<RunController> controller;
     std::unique_ptr<build::RunService> service;
+    std::unique_ptr<run::RunManager> nativeRuns;
 };
 
 TEST_F(RunControllerTest, TheStartupComboFollowsTheService) {
@@ -279,15 +294,19 @@ TEST_F(RunControllerTest, TheStartupComboFollowsTheService) {
 }
 
 TEST_F(RunControllerTest, RunsIntoTheConsoleAndPromptsBeforeARerun) {
+    if constexpr (!build::test::kWindows)
+        ASSERT_NO_FATAL_FAILURE(selectNativeProgram("App"));
     launcher.expect({.expectExecutable = programPath("App"), .neverExits = true});
     launcher.expect({.expectExecutable = programPath("App"), .stdoutBytes = "second run\r\n"});
 
     auto first = controller->run();
     ASSERT_TRUE(first.has_value()) << first.error().describe();
-    ASSERT_TRUE(builder.finish());
+    if constexpr (build::test::kWindows)
+        ASSERT_TRUE(builder.finish());
     ASSERT_TRUE(spinUntil([&] { return console().input()->isEnabled(); })) << console().text().toStdString();
     EXPECT_TRUE(controller->running());
-    EXPECT_EQ(console().title()->text(), QStringLiteral("App [Debug|x64]"));
+    EXPECT_EQ(console().title()->text(),
+              build::test::kWindows ? QStringLiteral("App [Debug|x64]") : QStringLiteral("App"));
 
     // Busy: declining the prompt leaves it running.
     auto declined = controller->run();
@@ -299,8 +318,10 @@ TEST_F(RunControllerTest, RunsIntoTheConsoleAndPromptsBeforeARerun) {
     // Accepting stops it and runs it again.
     acceptRerun = true;
     ASSERT_TRUE(controller->run().has_value());
-    ASSERT_TRUE(builder.finish());
-    ASSERT_TRUE(service->waitForIdle(30s)); // Every event is queued for the GUI thread now.
+    if constexpr (build::test::kWindows) {
+        ASSERT_TRUE(builder.finish());
+        ASSERT_TRUE(service->waitForIdle(30s)); // Every event is queued for the GUI thread now.
+    }
     EXPECT_TRUE(spinUntil([&] {
         return !controller->running() &&
                console().text().endsWith(QStringLiteral("Process finished with exit code 0\n"));
@@ -339,10 +360,13 @@ TEST_F(RunControllerTest, TheRunActionsDriveTheController) {
     EXPECT_EQ(invoke(kToggleExternalConsoleActionId), input::InvokeResult::Ran);
     EXPECT_FALSE(service->useExternalConsole());
 
-    // Ctrl+F5's action runs the startup project like Run; Stop then ends it.
+    // Ctrl+F5's action starts the selected program like Run; Stop then ends it.
+    if constexpr (!build::test::kWindows)
+        ASSERT_NO_FATAL_FAILURE(selectNativeProgram("Tool"));
     launcher.expect({.expectExecutable = programPath("Tool"), .neverExits = true});
     EXPECT_EQ(invoke(kRunWithoutDebuggingActionId), input::InvokeResult::Ran);
-    ASSERT_TRUE(builder.finish());
+    if constexpr (build::test::kWindows)
+        ASSERT_TRUE(builder.finish());
     ASSERT_TRUE(spinUntil([&] { return console().input()->isEnabled(); }));
     EXPECT_TRUE(registry.isEnabled(*registry.find(kStopActionId), context));
     EXPECT_EQ(invoke(kStopActionId), input::InvokeResult::Ran);
@@ -377,6 +401,14 @@ TEST_F(RunControllerTest, ADebugRunIsLeftToTheDebugger) {
              handed = launch;
              finished = true;
          }});
+    if constexpr (!build::test::kWindows) {
+        ASSERT_FALSE(started.has_value());
+        EXPECT_EQ(started.error().code(), ErrorCode::Unsupported);
+        EXPECT_FALSE(finished.load());
+        EXPECT_FALSE(controller->running());
+        EXPECT_TRUE(launcher.launches().empty());
+        return;
+    }
     ASSERT_TRUE(started.has_value()) << started.error().describe();
     ASSERT_TRUE(builder.finish());
     ASSERT_TRUE(spinUntil([&] { return finished.load(); }));
