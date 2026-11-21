@@ -693,6 +693,7 @@ TEST(Workbench, ClosingADirtyTabSavesIt) {
     EXPECT_EQ(rig.window->tabs().count(), 0);
 }
 
+#ifdef _WIN32
 TEST(Workbench, SaveAllRunsBeforeABuild) {
     WorkDir dir("build", "tiny_sln");
     // A fake MSBuild that records what main.cpp held on disk when the build started.
@@ -786,6 +787,7 @@ TEST(Workbench, SwitchingProjectsDuringBuildKeepsTheCurrentProjectAndTabs) {
     release = true;
     EXPECT_TRUE(waitFor([&] { return !rig.workbench->build().isBuilding(); }));
 }
+#endif
 
 TEST(Workbench, ProjectSwitcherOpensRecentIdentityAndKeepsCurrentOnMissingPath) {
     WorkDir dir("project-switcher", "tiny_sln");
