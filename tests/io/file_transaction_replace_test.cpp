@@ -12,6 +12,7 @@
 
 #include <cstring>
 #include <format>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -158,7 +159,7 @@ frost::Result<std::string> supportedSnapshot(std::string_view path) {
 }
 
 #ifdef _WIN32
-frost::Result<void> makeInheritedDaclExplicit(std::string_view path, std::string descriptor) {
+frost::Result<void> makeInheritedDaclExplicit(std::string_view path, std::string descriptor, bool alterAccess = false) {
     auto wide = toWin32Path(path);
     if (!wide)
         return std::unexpected(wide.error());
@@ -166,13 +167,20 @@ frost::Result<void> makeInheritedDaclExplicit(std::string_view path, std::string
     BOOL present = FALSE, defaulted = FALSE;
     if (!GetSecurityDescriptorDacl(descriptor.data(), &present, &acl, &defaulted) || !present || !acl)
         return std::unexpected(lastWin32Error("test: read inherited ACL", path));
+    bool accessAltered = false;
     for (DWORD index = 0; index < acl->AceCount; ++index) {
         void* ace = nullptr;
         if (!GetAce(acl, index, &ace))
             return std::unexpected(lastWin32Error("test: read inherited ACE", path));
-        auto& flags = static_cast<ACE_HEADER*>(ace)->AceFlags;
-        flags = static_cast<BYTE>(flags & ~INHERITED_ACE);
+        auto& header = *static_cast<ACE_HEADER*>(ace);
+        header.AceFlags = static_cast<BYTE>(header.AceFlags & ~INHERITED_ACE);
+        if (alterAccess && !accessAltered && header.AceType == ACCESS_ALLOWED_ACE_TYPE) {
+            static_cast<ACCESS_ALLOWED_ACE*>(ace)->Mask ^= FILE_EXECUTE;
+            accessAltered = true;
+        }
     }
+    if (alterAccess && !accessAltered)
+        return frost::fail(frost::ErrorCode::Unsupported, "test: no allow ACE to change");
     const DWORD changed = SetNamedSecurityInfoW(wide->data(), SE_FILE_OBJECT,
                                                 DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
                                                 nullptr, nullptr, acl, nullptr);
@@ -680,10 +688,16 @@ TEST_F(FileTransactionReplace, InheritedSourceSecurityRoundTripsFromPrivateStore
         DWORD revision = 0;
         ASSERT_TRUE(GetSecurityDescriptorControl(descriptor, &control, &revision));
         ASSERT_EQ(control & SE_DACL_PROTECTED, 0);
+        // Windows may synthesize inherited flags when interpreting a legacy
+        // descriptor. The receipt must still freeze the raw public bytes.
+        EXPECT_TRUE(expected->ends_with(saved.beforePublicSecurity));
         PACL acl = nullptr;
-        BOOL present = FALSE, defaulted = FALSE;
-        ASSERT_TRUE(GetSecurityDescriptorDacl(descriptor, &present, &acl, &defaulted));
-        ASSERT_TRUE(present);
+        PSECURITY_DESCRIPTOR inheritanceView = nullptr;
+        ASSERT_EQ(GetNamedSecurityInfoW(path->data(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, nullptr, nullptr, &acl,
+                                        nullptr, &inheritanceView),
+                  ERROR_SUCCESS);
+        const auto release = [](void* value) { LocalFree(value); };
+        std::unique_ptr<void, decltype(release)> ownedView(inheritanceView, release);
         ASSERT_NE(acl, nullptr);
         bool inherited = false;
         for (DWORD index = 0; index < acl->AceCount; ++index) {
@@ -697,6 +711,13 @@ TEST_F(FileTransactionReplace, InheritedSourceSecurityRoundTripsFromPrivateStore
     }
     // Windows may already project the DACL during retirement, depending on the fixture volume's
     // directory inheritance. Establish that exact native state for deterministic recovery coverage.
+    auto altered = makeInheritedDaclExplicit(saved.retainedBeforePath, saved.beforePublicSecurity, true);
+    ASSERT_TRUE(altered) << altered.error().describe();
+    const auto refused = recoverFileReplacement(saved, before, after, false, 65536);
+    ASSERT_FALSE(refused);
+    EXPECT_EQ(refused.error().code(), frost::ErrorCode::Busy);
+    expectBytes(saved.retainedBeforePath, before);
+
     auto projected = makeInheritedDaclExplicit(saved.retainedBeforePath, saved.beforePublicSecurity);
     ASSERT_TRUE(projected) << projected.error().describe();
     ASSERT_NE(supportedSnapshot(saved.retainedBeforePath), expected);

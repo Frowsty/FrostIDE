@@ -108,35 +108,18 @@ Result<Native> openNative(std::string_view path, bool writable = false, bool dir
 
 #ifdef _WIN32
 Result<std::vector<unsigned char>> securityOf(HANDLE handle, std::string_view path) {
-    PSECURITY_DESCRIPTOR descriptor = nullptr;
-    const DWORD error = GetSecurityInfo(
-        handle, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
-        nullptr, nullptr, nullptr, nullptr, &descriptor);
-    if (error != ERROR_SUCCESS)
-        return std::unexpected(win32Error(error, "replacement: inspect owner/group/DACL (not SACL)", path));
-    const auto release = [](void* pointer) {
-        if (pointer)
-            LocalFree(pointer);
-    };
-    std::unique_ptr<void, decltype(release)> owner(descriptor, release);
-    SECURITY_DESCRIPTOR_CONTROL control{};
-    DWORD revision = 0;
-    if (!GetSecurityDescriptorControl(descriptor, &control, &revision))
-        return std::unexpected(lastWin32Error("replacement: inspect security descriptor form", path));
-    if ((control & SE_SELF_RELATIVE) != 0) {
-        const auto length = GetSecurityDescriptorLength(descriptor);
-        if (length == 0 || length > 65536)
-            return fail(ErrorCode::OutOfRange, "replacement: supported security descriptor exceeds bound");
-        const auto* start = static_cast<const unsigned char*>(descriptor);
-        return std::vector<unsigned char>(start, start + length);
-    }
+    // GetSecurityInfo can synthesize inherited ACE markers for legacy file
+    // descriptors. Freeze the actual descriptor returned by the held object.
+    constexpr DWORD fields = OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION;
     DWORD size = 0;
-    MakeSelfRelativeSD(descriptor, nullptr, &size);
-    if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || size == 0 || size > 65536)
-        return std::unexpected(lastWin32Error("replacement: size supported security descriptor", path));
+    GetKernelObjectSecurity(handle, fields, nullptr, 0, &size);
+    if (GetLastError() != ERROR_INSUFFICIENT_BUFFER)
+        return std::unexpected(lastWin32Error("replacement: size owner/group/DACL (not SACL)", path));
+    if (size == 0 || size > 65536)
+        return fail(ErrorCode::OutOfRange, "replacement: supported security descriptor exceeds bound");
     std::vector<unsigned char> result(size);
-    if (!MakeSelfRelativeSD(descriptor, result.data(), &size))
-        return std::unexpected(lastWin32Error("replacement: capture supported security descriptor", path));
+    if (!GetKernelObjectSecurity(handle, fields, result.data(), size, &size))
+        return std::unexpected(lastWin32Error("replacement: capture owner/group/DACL (not SACL)", path));
     result.resize(size);
     return result;
 }
@@ -342,14 +325,14 @@ bool sameSupportedMetadata(const Metadata& a, const Metadata& b, bool includeSec
 #ifdef _WIN32
 constexpr auto kSecurityControlOffset = offsetof(SECURITY_DESCRIPTOR_RELATIVE, Control);
 
-bool publishedSecurityWasConverted(const std::vector<unsigned char>& actual, const Metadata& expected) {
-    if (actual.size() != expected.security.size() || actual.size() < kSecurityControlOffset + sizeof(WORD))
+bool securityWasAutoInherited(const std::vector<unsigned char>& actual, const std::vector<unsigned char>& expected) {
+    if (actual.size() != expected.size() || actual.size() < kSecurityControlOffset + sizeof(WORD))
         return false;
     SECURITY_DESCRIPTOR_CONTROL control{};
-    std::memcpy(&control, expected.security.data() + kSecurityControlOffset, sizeof(control));
+    std::memcpy(&control, expected.data() + kSecurityControlOffset, sizeof(control));
     if ((control & SE_DACL_AUTO_INHERITED) != 0)
         return false;
-    auto converted = expected.security;
+    auto converted = expected;
     const auto convertedControl = static_cast<SECURITY_DESCRIPTOR_CONTROL>(control | SE_DACL_AUTO_INHERITED);
     std::memcpy(converted.data() + kSecurityControlOffset, &convertedControl, sizeof(convertedControl));
     return converted == actual;
@@ -360,7 +343,8 @@ bool publishedSecurityWasConverted(const std::vector<unsigned char>& actual, con
 bool retainedSecurityMatches(const Metadata& actual, const Metadata& expected) {
     if (actual.security == expected.security)
         return true;
-    if (actual.security.size() != expected.security.size())
+    if (actual.security.size() != expected.security.size() ||
+        actual.security.size() < kSecurityControlOffset + sizeof(WORD))
         return false;
     // Parse only the descriptor freshly obtained from Windows, never offsets supplied by a receipt.
     auto* descriptor = const_cast<unsigned char*>(actual.security.data());
@@ -383,7 +367,9 @@ bool retainedSecurityMatches(const Metadata& actual, const Metadata& expected) {
             static_cast<std::size_t>(static_cast<unsigned char*>(ace) - descriptor) + offsetof(ACE_HEADER, AceFlags);
         projection[offset] = static_cast<unsigned char>(projection[offset] & ~INHERITED_ACE);
     }
-    return projection == actual.security;
+    // The native protection setter can also record that automatic inheritance
+    // converted an older descriptor. Accept only that exact control-bit addition.
+    return projection == actual.security || securityWasAutoInherited(actual.security, projection);
 }
 
 Result<void> publishCapturedDacl(const Native& file, const Metadata& expected, std::string_view path) {
@@ -400,19 +386,8 @@ Result<void> publishCapturedDacl(const Native& file, const Metadata& expected, s
     const DWORD security =
         DACL_SECURITY_INFORMATION |
         ((control & SE_DACL_PROTECTED) ? PROTECTED_DACL_SECURITY_INFORMATION : UNPROTECTED_DACL_SECURITY_INFORMATION);
-    const auto applied = SetSecurityInfo(file.get(), SE_FILE_OBJECT, security, nullptr, nullptr, acl, nullptr);
-    if (applied != ERROR_SUCCESS)
-        return std::unexpected(win32Error(applied, "replacement: install captured DACL", path));
-    auto observed = securityOf(file.get(), path);
-    if (!observed)
-        return std::unexpected(observed.error());
-    if (*observed == expected.security)
-        return {};
-    // SetSecurityInfo can add this conversion status bit on a legacy descriptor. The held
-    // regular NTFS file can restore that exact descriptor once the normal inheritance step has
-    // proved every other byte. The caller verifies the entire descriptor again after the setter.
-    if (!publishedSecurityWasConverted(*observed, expected))
-        return fail(ErrorCode::IoError, "replacement: published DACL differs from its exact captured security");
+    // This is a held, verified regular file. Restore the captured descriptor
+    // without the legacy-to-automatic conversion performed by SetSecurityInfo.
     if (!SetKernelObjectSecurity(file.get(), security, descriptor))
         return std::unexpected(lastWin32Error("replacement: restore captured DACL control state", path));
     return {};
@@ -644,7 +619,7 @@ Result<Native> checkedObjectAt(std::string_view path, const Metadata& expected, 
     if (!metadataMatches && includeSecurity && (privateObject || justPublished))
         metadataMatches = sameSupportedMetadata(*actual, expected, false) &&
                           (retainedSecurityMatches(*actual, expected) ||
-                           (justPublished && publishedSecurityWasConverted(actual->security, expected)));
+                           (justPublished && securityWasAutoInherited(actual->security, expected.security)));
 #else
     static_cast<void>(justPublished);
 #endif
@@ -674,7 +649,7 @@ Result<void> publishedOriginalAt(const Native& file, std::string_view path, cons
     if (!actual)
         return std::unexpected(actual.error());
     if (!sameObject(*actual, expected) || !sameSupportedMetadata(*actual, expected, false) ||
-        (!retainedSecurityMatches(*actual, expected) && !publishedSecurityWasConverted(actual->security, expected)))
+        (!retainedSecurityMatches(*actual, expected) && !securityWasAutoInherited(actual->security, expected.security)))
         return fail(ErrorCode::Busy, "replacement: original changed before restoring its public DACL");
     if (actual->security != expected.security) {
         if (auto restored = publishCapturedDacl(file, expected, path); !restored)
@@ -1075,7 +1050,7 @@ FileReplacementOutcome PreparedFileReplacement::installAfter() {
             return failed(securityState.error());
         if (!retainedSecurityMatches(*securityState, state.after) &&
             !retainedSecurityMatches(*securityState, state.before) &&
-            !publishedSecurityWasConverted(securityState->security, state.before))
+            !securityWasAutoInherited(securityState->security, state.before.security))
             return failed(Error(ErrorCode::Busy, "published After security changed outside the frozen transition"));
         if (securityState->security != state.before.security) {
             // Stage permissions stay owner-private until the file is at the intended workspace endpoint.
@@ -1758,7 +1733,7 @@ Result<PreparedFileReplacement> recoverFileReplacement(const FileReplacementRece
                 if (metadataDigest(publicBefore) == saved.beforeMetadataSha256 &&
                     (retainedSecurityMatches(*meta, publicBefore) ||
                      (path != saved.retainedBeforePath &&
-                      publishedSecurityWasConverted(meta->security, publicBefore)))) {
+                      securityWasAutoInherited(meta->security, publicBefore.security)))) {
                     beforeRequiringPublicSecurity = path != saved.retainedBeforePath;
                     *meta = std::move(publicBefore);
                     matched = true;
@@ -1798,7 +1773,7 @@ Result<PreparedFileReplacement> recoverFileReplacement(const FileReplacementRece
         if (!matched && !creation && !desiredBefore && path == saved.images.targetPath &&
             saved.phase != FileReplacementPhase::AfterInstalled)
             matched = sameSupportedMetadata(*meta, state->before, false) &&
-                      publishedSecurityWasConverted(meta->security, state->before);
+                      securityWasAutoInherited(meta->security, state->before.security);
         if (!matched && !creation && path == saved.replacementPath)
             matched =
                 sameSupportedMetadata(*meta, state->before, false) && retainedSecurityMatches(*meta, state->before);
