@@ -165,11 +165,13 @@ void LanguageController::showIntentions() {
         [this, path, all, requestedSnapshot](Result<std::vector<fl::CodeActionItem>> actions) {
             std::vector<QString> titles;
             std::vector<bool> preferred;
+            std::vector<QString> disabledReasons;
             m_choiceActions.clear();
             if (actions) {
                 for (fl::CodeActionItem& action : *actions) {
                     titles.push_back(qs(action.title));
                     preferred.push_back(action.preferred);
+                    disabledReasons.push_back(qs(action.disabledReason));
                     m_choiceActions.emplace_back([this, path, requestedSnapshot, title = qs(action.title),
                                                   edit = std::move(action.edit), cmd = std::move(action.commandName),
                                                   args = std::move(action.commandArguments),
@@ -241,7 +243,7 @@ void LanguageController::showIntentions() {
                 });
             }
             m_choice->start(QStringLiteral("Context Actions"), titles, m_services.host.caretScreenRect(),
-                            std::move(preferred));
+                            std::move(preferred), std::move(disabledReasons));
         });
 }
 

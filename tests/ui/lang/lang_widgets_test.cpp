@@ -55,6 +55,8 @@ TEST(CompletionPopupWidget, EnterCommitsActualServerPreselectWithinBestMatchClas
     list.items = {first, preferred};
     popup.setList(std::move(list));
     popup.setPrefix("al");
+    popup.showAt(QRect(100, 100, 2, 16));
+    ASSERT_TRUE(popup.isVisible());
     std::optional<std::size_t> committed;
     QObject::connect(&popup, &CompletionPopup::commitRequested, [&](std::size_t index, bool) { committed = index; });
     EXPECT_TRUE(popup.handleKey(Qt::Key_Return, Qt::NoModifier));

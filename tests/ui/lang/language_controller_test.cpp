@@ -391,8 +391,8 @@ TEST(LanguageControllerRequests, CapturingFactorySurvivesDeferredStartSuspension
                 }
                 co_return static_cast<int>(payload->size());
             };
-            auto factory =
-                std::bind_front(std::move(coroutine), payloadLifetime, std::ref(executor), std::ref(observed));
+            auto factory = [coroutine = std::move(coroutine), payloadLifetime, &executor, &observed](
+                               std::stop_token token) { return coroutine(payloadLifetime, executor, observed, token); };
             frost::ui::lang::LanguageControllerTestAccess::startInteger(
                 controller, slot, std::move(factory),
                 [&](frost::Result<int> result) { delivered.emplace(std::move(result)); });
@@ -896,6 +896,31 @@ TEST(LanguageControllerRefactoring, RenameAndQuickFixGoThroughTheApplier) {
     EXPECT_TRUE(status[0].contains(QStringLiteral("save or reload")));
 }
 
+TEST(LanguageControllerRefactoring, DisabledContextActionsExposeTheirReasonAndCannotBeSelected) {
+    FeatureServer server;
+    server.on("textDocument/codeAction", [](const Json&) {
+        return Json::array({Json::object()
+                                .set("title", "Create declaration")
+                                .set("kind", "quickfix")
+                                .set("disabled", Json::object().set("reason", "File creation is unavailable"))});
+    });
+    FakeHost host("int value;");
+    Rig rig(server, host);
+    rig.controller.showIntentions();
+    auto& choice = rig.controller.choicePopup();
+    ASSERT_TRUE(pumpUntil([&] { return choice.isVisible(); }));
+    ASSERT_GE(choice.list()->count(), 2);
+    const auto* action = choice.list()->item(0);
+    EXPECT_EQ(action->text(), QStringLiteral("Create declaration"));
+    EXPECT_FALSE(action->flags().testFlag(Qt::ItemIsEnabled));
+    EXPECT_FALSE(action->flags().testFlag(Qt::ItemIsSelectable));
+    EXPECT_EQ(action->toolTip(), QStringLiteral("File creation is unavailable"));
+    EXPECT_EQ(action->data(Qt::AccessibleDescriptionRole).toString(), action->toolTip());
+    EXPECT_EQ(choice.list()->currentRow(), 1);
+    EXPECT_TRUE(rig.applier.edits.empty());
+    EXPECT_TRUE(server.paramsOf("workspace/executeCommand").empty());
+}
+
 TEST(LanguageControllerRefactoring, ShowIntentionsOpensRiderContextMenuAndNavigatesWithoutQuickFixes) {
     FeatureServer server;
     const std::string target = workPath("decl.hpp");
@@ -1222,14 +1247,14 @@ TEST(LanguageControllerNavigation, OwnedLibraryActionsCacheActualBytesAndKeepSou
     frost::io::MemFs fs(frost::systemClock());
     ASSERT_TRUE(fs.createDirectories(frost::io::parentPath(metadataCache())));
     RecordingApplier applier;
-    LanguageController controller(
-        LanguageServices{.server = server.client(),
-                         .scheduler = server.scheduler(),
-                         .host = host,
-                         .applier = applier,
-                         .fs = fs,
-                         .diagnostics = [](std::string_view) { return std::vector<fl::LiveDiagnostic>{}; },
-                         .metadataCacheDir = metadataCache()});
+    LanguageController controller(frost::ui::lang::LanguageServices{
+        .server = server.client(),
+        .scheduler = server.scheduler(),
+        .host = host,
+        .applier = applier,
+        .fs = fs,
+        .diagnostics = [](std::string_view) { return std::vector<fl::LiveDiagnostic>{}; },
+        .metadataCacheDir = metadataCache()});
     server.on("textDocument/declaration", [](const Json&) { return Json::array(); });
     server.on("textDocument/definition", [](const Json&) { return Json::array(); });
     controller.gotoDeclaration();
@@ -1276,14 +1301,14 @@ TEST(LanguageControllerNavigation, OwnedLibraryRejectsBadReceiptAndWorkspaceCach
     frost::io::MemFs fs(frost::systemClock());
     ASSERT_TRUE(fs.createDirectories(workDir()));
     RecordingApplier applier;
-    LanguageController controller(
-        LanguageServices{.server = server.client(),
-                         .scheduler = server.scheduler(),
-                         .host = host,
-                         .applier = applier,
-                         .fs = fs,
-                         .diagnostics = [](std::string_view) { return std::vector<fl::LiveDiagnostic>{}; },
-                         .metadataCacheDir = workPath("caches")});
+    LanguageController controller(frost::ui::lang::LanguageServices{
+        .server = server.client(),
+        .scheduler = server.scheduler(),
+        .host = host,
+        .applier = applier,
+        .fs = fs,
+        .diagnostics = [](std::string_view) { return std::vector<fl::LiveDiagnostic>{}; },
+        .metadataCacheDir = workPath("caches")});
     std::vector<QString> status;
     QObject::connect(&controller, &LanguageController::statusMessage,
                      [&](const QString& message) { status.push_back(message); });

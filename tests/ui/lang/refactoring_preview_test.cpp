@@ -23,7 +23,8 @@ fl::WorkspaceEdit proposed() {
                       {.path = "/project/b.cpp",
                        .uri = "file:///project/b.cpp",
                        .version = std::nullopt,
-                       .edits = {{{{0, 0}, {0, 3}}, "newName"}}}}};
+                       .edits = {{{{0, 0}, {0, 3}}, "newName"}}}},
+            .managed = std::nullopt};
 }
 
 struct Files {

@@ -310,6 +310,7 @@ void ChoicePopup::start(const QString& title, const std::vector<QString>& choice
             // Visible but inert: the reason names the owning epic.
             row->setFlags(row->flags() & ~(Qt::ItemIsEnabled | Qt::ItemIsSelectable));
             row->setToolTip(disabledReasons[i]);
+            row->setData(Qt::AccessibleDescriptionRole, disabledReasons[i]);
         } else if (firstEnabled < 0) {
             firstEnabled = static_cast<int>(i);
         }
