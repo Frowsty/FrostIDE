@@ -32,7 +32,7 @@ def verify(payload: Path, expected_manifest: str, *, rid: str | None = None) -> 
     for key, expected in (("runtimeCommit", "6aa72daa24f66c01c3d7b6a32519e9d21396deec"),
                           ("netcoredbgCommit", "9744e1f051866215611b8440c638042aa2aa2f72"),
                           ("patchSha256", "6379dd5d3fd68f4bb2cbc5ba9252e43bc8650f84bb22c9790968a4396b87a50b"),
-                          ("helperSourceSha256", "cc562d800e8cdbd095827b1b17c1e8c863632490733a2c03bad1158cb2af58dd"),
+                          ("helperSourceSha256", "a386250e8e1620ff53f4243fe4278d95be4c3df5055b124f2ee59b91d7e20add"),
                           ("sdkVersion", "10.0.403")):
         if record.get(key) != expected:
             raise ValueError(f"payload input pin mismatch: {key}")

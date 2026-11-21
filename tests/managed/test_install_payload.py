@@ -36,7 +36,7 @@ class InstallPayloadTest(unittest.TestCase):
                   "runtimeCommit": "6aa72daa24f66c01c3d7b6a32519e9d21396deec",
                   "netcoredbgCommit": "9744e1f051866215611b8440c638042aa2aa2f72",
                   "patchSha256": "6379dd5d3fd68f4bb2cbc5ba9252e43bc8650f84bb22c9790968a4396b87a50b",
-                  "helperSourceSha256": "cc562d800e8cdbd095827b1b17c1e8c863632490733a2c03bad1158cb2af58dd",
+                  "helperSourceSha256": "a386250e8e1620ff53f4243fe4278d95be4c3df5055b124f2ee59b91d7e20add",
                   "sdkVersion": "10.0.403", "files": files,
                   "toolSha256": {str(i): "a" * 64 for i in range(5)},
                   "recipeSha256": {str(i): "a" * 64 for i in range(11)}}
@@ -68,6 +68,19 @@ class InstallPayloadTest(unittest.TestCase):
         self.assertEqual(hashlib.sha256((installed / "manifest.json").read_bytes()).hexdigest(), self.manifest)
         self.assertNotEqual(self.install().returncode, 0)
         self.assertTrue((installed / "PdbGuard/PdbGuard.dll").is_file())
+
+    def test_refuses_stale_or_unknown_helper_source_even_with_matching_manifest_hash(self) -> None:
+        manifest = self.payload / "manifest.json"
+        record = json.loads(manifest.read_text(encoding="utf-8"))
+        for pin in ("cc562d800e8cdbd095827b1b17c1e8c863632490733a2c03bad1158cb2af58dd", "a" * 64):
+            with self.subTest(pin=pin):
+                record["helperSourceSha256"] = pin
+                manifest.write_text(json.dumps(record, sort_keys=True), encoding="utf-8")
+                self.manifest = hashlib.sha256(manifest.read_bytes()).hexdigest()
+                result = self.install()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("payload input pin mismatch: helperSourceSha256", result.stderr)
+                self.assertFalse((self.app / "FrostManagedDebug").exists())
 
     def test_tampered_or_extra_file_is_rejected_before_install(self) -> None:
         target = self.payload / "PdbGuard/PdbGuard.dll"

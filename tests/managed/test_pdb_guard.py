@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import struct
 import subprocess
 import tempfile
 import unittest
@@ -80,6 +81,44 @@ class PdbGuardTest(unittest.TestCase):
     def guard_result(self, pe: Path, pdb: Path, source: Path) -> subprocess.CompletedProcess[str]:
         return subprocess.run([str(self.dotnet), str(self.guard), str(pe), str(pdb), str(source)],
                               cwd=self.work, env=self.env, capture_output=True, text=True)
+
+    def guard_pipe(self, mode: str, *blobs: bytes, trailing: bytes = b"") -> subprocess.CompletedProcess[bytes]:
+        data = b"".join(struct.pack("<I", len(blob)) + blob for blob in blobs) + trailing
+        return subprocess.run([str(self.dotnet), str(self.guard), mode], input=data,
+                              cwd=self.work, env=self.env, capture_output=True, timeout=15)
+
+    def test_mono_pipe_documents_bind_the_pe_and_pdb_without_claiming_source_verification(self) -> None:
+        pe, pdb = self.pe.read_bytes(), self.pdb.read_bytes()
+        result = self.guard_pipe("--mono-documents-pipe", pe, pdb)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        documents = json.loads(result.stdout)
+        self.assertIn(str(self.source), documents["documents"])
+        self.assertNotIn("sources", documents)
+        self.assertEqual(documents["assemblySha256"], hashlib.sha256(pe).hexdigest())
+        self.assertEqual(documents["pdbSha256"], hashlib.sha256(pdb).hexdigest())
+        refused = self.guard_pipe("--mono-documents-pipe", pe, pdb, trailing=b"x")
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertEqual(refused.stdout, b"")
+
+    def test_mono_pipe_map_verifies_each_source_before_returning_sequence_points(self) -> None:
+        pe, pdb = self.pe.read_bytes(), self.pdb.read_bytes()
+        documents = self.guard_pipe("--mono-documents-pipe", pe, pdb)
+        self.assertEqual(documents.returncode, 0, documents.stderr)
+        paths = json.loads(documents.stdout)["documents"]
+        sources = [Path(path).read_bytes() for path in paths]
+        source_index = paths.index(str(self.source))
+        result = self.guard_pipe("--mono-map-pipe", pe, pdb, *sources)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        decoded = json.loads(result.stdout)
+        self.assertEqual(decoded["sources"][source_index],
+                         {"path": str(self.source), "sha256": hashlib.sha256(sources[source_index]).hexdigest()})
+        self.assertTrue(any(point["sourceIndex"] == source_index and point["line"] > 0
+                            for point in decoded["sequencePoints"]))
+        sources[source_index] += b"\n// modified"
+        refused = self.guard_pipe("--mono-map-pipe", pe, pdb, *sources)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertEqual(refused.stdout, b"")
+        self.assertIn(b"source document checksum does not match", refused.stderr)
 
     def test_matching_source_and_assembly_succeed(self) -> None:
         self.assertEqual(self.guard_result(self.pe, self.pdb, self.source).returncode, 0)
