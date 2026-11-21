@@ -28,4 +28,12 @@ if(WIN32)
                 "$<TARGET_FILE:update_unit_tests>")
     set_tests_properties(UpdateParent.RealProcessExitBarrier PROPERTIES LABELS integration TIMEOUT 45
         RESOURCE_LOCK frost_desktop)
+    if(TARGET frost-update-apply)
+        add_dependencies(update_unit_tests frost-update-apply)
+        add_test(NAME UpdateParent.RealInPlaceHandoff
+            COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/in_place_handoff_test.py"
+                    "$<TARGET_FILE:frost-update-apply>" "$<TARGET_FILE:update_test_app_helper>")
+        set_tests_properties(UpdateParent.RealInPlaceHandoff PROPERTIES LABELS integration TIMEOUT 120
+            RESOURCE_LOCK frost_desktop)
+    endif()
 endif()

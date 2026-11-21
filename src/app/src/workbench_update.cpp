@@ -22,7 +22,9 @@
 #include "frost/ui/toolwindows/trust_dialog.hpp"
 #include "frost/ui/workbench/file_system_view.hpp"
 #include "frost/update/http_client.hpp"
+#include "frost/update/install_handoff.hpp"
 #include "frost/update/network_policy.hpp"
+#include "frost/update/parent_process.hpp"
 #include "frost/update/safe_updater.hpp"
 #include "frost/update/verification.hpp"
 #include "frost/vcs/git_locator.hpp"
@@ -40,6 +42,7 @@
 #include <QDateTime>
 #include <QDialog>
 #include <QDir>
+#include <QEventLoop>
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -52,15 +55,19 @@
 #include <QProgressDialog>
 #include <QPushButton>
 #include <QStandardPaths>
+#include <QTemporaryDir>
 #include <QTemporaryFile>
+#include <QTimer>
 #include <QVBoxLayout>
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstring>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <thread>
 #include <utility>
 
@@ -110,6 +117,101 @@ Result<void> launchDetached(io::IProcessLauncher& launcher, const QString& execu
         return std::unexpected(std::move(started.error()));
     return {}; // Destroying the uncontained IProcess leaves the child running.
 }
+
+#ifdef _WIN32
+// Await the helper's retained parent and verified-payload handles before requesting a normal close.
+Result<void> awaitUpdateHelper(io::IProcess& process) {
+    std::atomic<bool> done{false};
+    bool ready = false;
+    std::jthread wait([&] {
+        std::array<char, 7> response{};
+        std::span<char> unread = response;
+        while (!unread.empty()) {
+            auto count = process.readStdout(unread);
+            if (!count || *count == 0)
+                break;
+            unread = unread.subspan(*count);
+        }
+        ready = unread.empty() && std::string_view(response.data(), response.size()) == "ready\r\n";
+        done.store(true, std::memory_order_release);
+    });
+    QProgressDialog progress(QObject::tr("Verifying the update before restart…"), QObject::tr("Cancel"), 0, 0);
+    progress.setWindowModality(Qt::ApplicationModal);
+    progress.setMinimumDuration(0);
+    QEventLoop loop;
+    QTimer poll;
+    QObject::connect(&poll, &QTimer::timeout, &loop, [&] {
+        if (done.load(std::memory_order_acquire))
+            loop.quit();
+    });
+    QObject::connect(&progress, &QProgressDialog::canceled, &loop, &QEventLoop::quit);
+    QTimer deadline;
+    deadline.setSingleShot(true);
+    QObject::connect(&deadline, &QTimer::timeout, &loop, &QEventLoop::quit);
+    poll.start(20);
+    deadline.start(30000);
+    progress.show();
+    loop.exec();
+    if (!done.load(std::memory_order_acquire)) {
+        (void)process.terminate();
+        process.abandonOutput();
+    }
+    wait.join();
+    if (progress.wasCanceled())
+        return fail(ErrorCode::Cancelled, "The update was cancelled");
+    if (!ready)
+        return fail(ErrorCode::IoError, "The update helper could not verify the payload and prepare to restart");
+    return {};
+}
+
+Result<std::unique_ptr<io::IProcess>> prepareMarkedUpdate(io::IFileSystem& fs, io::IProcessLauncher& launcher,
+                                                          const QDir& workspace, const QString& installDir,
+                                                          const QString& updateArchive,
+                                                          const update::Release& release) {
+    update::SafeUpdater verifier(fs, launcher);
+    if (auto verified = verifier.verifyPayloadFile(updateArchive.toStdString(), release); !verified)
+        return std::unexpected(verified.error());
+    auto helper =
+        update::stagePerUserUpdateHelper(fs, installDir.toStdString(), workspace.absolutePath().toStdString());
+    if (!helper)
+        return std::unexpected(helper.error());
+    auto parent = update::currentParentIdentity();
+    if (!parent)
+        return std::unexpected(parent.error());
+    constexpr std::string_view digits = "0123456789abcdef";
+    std::string digest;
+    for (const auto byte : release.digest) {
+        digest.push_back(digits[byte >> 4]);
+        digest.push_back(digits[byte & 15]);
+    }
+    auto identity = update::encodeReleaseFloor({release.version, release.build, std::move(digest)});
+    if (!identity)
+        return std::unexpected(identity.error());
+    io::ProcessSpec spec;
+    spec.executable = helper->executable;
+    spec.arguments = {QDir::toNativeSeparators(installDir).toStdString(),
+                      QDir::toNativeSeparators(workspace.filePath(QStringLiteral("backup"))).toStdString(),
+                      QDir::toNativeSeparators(updateArchive).toStdString()};
+    spec.workingDirectory = workspace.absolutePath().toStdString();
+    spec.stdinMode = io::Stdio::Pipe;
+    spec.stdoutMode = io::Stdio::Pipe;
+    spec.stderrMode = io::Stdio::Null;
+    spec.killOnClose = false;
+    auto child = launcher.launch(spec);
+    if (!child)
+        return std::unexpected(child.error());
+    const auto request = std::to_string(parent->pid) + " " + std::to_string(parent->creationTime) + "\n" +
+                         std::to_string(release.size) + "\n" + *identity + "\n" + helper->installReceiptDigest + "\n";
+    if (auto sent = (*child)->writeStdin(request); !sent)
+        return std::unexpected(sent.error());
+    if (auto ready = awaitUpdateHelper(**child); !ready) {
+        (*child)->closeStdin();
+        (void)(*child)->wait(std::chrono::seconds(2));
+        return std::unexpected(ready.error());
+    }
+    return child;
+}
+#endif
 
 // Windows PowerShell 5.1 by absolute path (<system directory>\WindowsPowerShell\v1.0), never by
 // bare name. Errors: Unsupported off Windows, NotFound.
@@ -423,7 +525,18 @@ void Workbench::applyVerifiedUpdate() {
     const auto inPlaceUnavailable =
         tr("This per-user installation tracks the files it owns for uninstall. Install the update in a separate Build "
            "Folder to keep that information intact.");
-    if (const auto receipt = currentInstallReceipt(); receipt.exists() || receipt.isSymLink()) {
+    const auto inPlaceHelperAvailable = [] {
+#ifdef _WIN32
+        const auto path = QDir(QCoreApplication::applicationDirPath()).filePath(qs(update::kPerUserUpdateHelperName));
+        const QFileInfo helper(path);
+        return helper.isFile() && !helper.isSymLink();
+#else
+        return false;
+#endif
+    };
+    const auto receiptAtChoice = currentInstallReceipt();
+    const bool markedAtChoice = receiptAtChoice.exists() || receiptAtChoice.isSymLink();
+    if (markedAtChoice && !inPlaceHelperAvailable()) {
         inPlaceBtn->setEnabled(false);
         inPlaceBtn->setToolTip(inPlaceUnavailable);
         descLabel->setText(descLabel->text() + QStringLiteral("\n\n") + inPlaceUnavailable);
@@ -449,11 +562,6 @@ void Workbench::applyVerifiedUpdate() {
     ui::installDialogChrome(&dialog, false);
     if (dialog.exec() != QDialog::Accepted || installMode == 0)
         return;
-
-    if (const auto receipt = currentInstallReceipt(); installMode == 2 && (receipt.exists() || receipt.isSymLink())) {
-        QMessageBox::warning(parentWin, tr("In-Place Update Unavailable"), inPlaceUnavailable);
-        return;
-    }
 
     const QString localData = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
     if (localData.isEmpty())
@@ -561,6 +669,51 @@ void Workbench::applyVerifiedUpdate() {
     }
 
     if (installMode == 2) {
+        if (const auto receipt = currentInstallReceipt(); markedAtChoice || receipt.exists() || receipt.isSymLink()) {
+#ifdef _WIN32
+            if (inPlaceHelperAvailable()) {
+                const QPointer<Workbench> self(this);
+                const QPointer<QWidget> active(parentWin);
+                QTemporaryDir workspace(updatesDir + QStringLiteral("/inplace-XXXXXX"));
+                if (!workspace.isValid()) {
+                    QMessageBox::warning(parentWin, tr("Update Installation Failed"),
+                                         tr("Could not create a private updater workspace."));
+                    return;
+                }
+                m_updateChecking = true;
+                auto helper =
+                    prepareMarkedUpdate(m_services.fs, m_services.launcher, QDir(workspace.path()),
+                                        QCoreApplication::applicationDirPath(), stagedZip, m_verifiedRelease->release);
+                if (!self)
+                    return;
+                m_updateChecking = false;
+                if (!helper) {
+                    if (active && helper.error().code() != ErrorCode::Cancelled)
+                        QMessageBox::warning(active, tr("Update Installation Failed"), qs(helper.error().message()));
+                    return;
+                }
+                m_exitConfirmed = true;
+                if (m_window && !m_window->close()) {
+                    if (self)
+                        m_exitConfirmed = false;
+                    (*helper)->closeStdin();
+                    (void)(*helper)->wait(std::chrono::seconds(2));
+                    return;
+                }
+                if (auto sent = (*helper)->writeStdin("apply\n"); !sent) {
+                    (void)(*helper)->wait(std::chrono::seconds(2));
+                    QMessageBox::warning(nullptr, tr("Update Installation Failed"), qs(sent.error().message()));
+                    return;
+                }
+                (*helper)->closeStdin();
+                workspace.setAutoRemove(false);
+                QCoreApplication::quit();
+                return;
+            }
+#endif
+            QMessageBox::warning(parentWin, tr("In-Place Update Unavailable"), inPlaceUnavailable);
+            return;
+        }
         update::SafeUpdater verifier(m_services.fs, m_services.launcher);
         if (auto verified = verifier.verifyPayloadFile(stagedZip.toStdString(), m_verifiedRelease->release);
             !verified) {

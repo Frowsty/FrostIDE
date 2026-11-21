@@ -35,6 +35,7 @@ import test_symbolize as symbol_fixtures
 _FROST_GUID = bytes(range(16, 32))
 _APP_GUID = bytes(range(32, 48))
 _DBGENG_GUID = bytes(range(48, 64))
+_UPDATER_GUID = bytes(range(64, 80))
 _STAGED_HELPERS = ("frost-clang.exe", "frost-analyzer.exe", "frost-snapshot-validator.exe", "frost_held_read.exe")
 
 
@@ -231,6 +232,9 @@ class StageScriptTest(TempDirTestCase):
         (bin_dir / "frost-dbgeng-dap.exe").write_bytes(
             symbol_fixtures.pe_bytes(_DBGENG_GUID, 1, "frost-dbgeng-dap.pdb"))
         (bin_dir / "frost-dbgeng-dap.pdb").write_bytes(symbol_fixtures.msf_bytes(_DBGENG_GUID))
+        (bin_dir / "frost-update-apply.exe").write_bytes(
+            symbol_fixtures.pe_bytes(_UPDATER_GUID, 1, "frost-update-apply.pdb"))
+        (bin_dir / "frost-update-apply.pdb").write_bytes(symbol_fixtures.msf_bytes(_UPDATER_GUID))
         # Even stale SDK/debugger DLLs in the build directory are not redistributed.
         (bin_dir / "dbgeng.dll").write_bytes(b"MZ-NOT-FOR-REDISTRIBUTION")
         (bin_dir / "dbgmodel.dll").write_bytes(b"MZ-NOT-FOR-REDISTRIBUTION")
@@ -468,7 +472,8 @@ class StageScriptTest(TempDirTestCase):
         self.assertIn(f"symbols {archive}", result.stdout)
         with zipfile.ZipFile(archive) as packed:
             self.assertEqual(sorted(packed.namelist()),
-                             ["frost-dbgeng-dap.exe", "frost-dbgeng-dap.pdb", "frost.exe", "frost.pdb",
+                             ["frost-dbgeng-dap.exe", "frost-dbgeng-dap.pdb", "frost-update-apply.exe",
+                              "frost-update-apply.pdb", "frost.exe", "frost.pdb",
                               "frost_app.dll", "frost_app.pdb", "symbols.json"])
             self.assertEqual(packed.read("frost_app.pdb"), (build / "src/app/Debug/frost_app.pdb").read_bytes())
             self.assertEqual(packed.read("frost-dbgeng-dap.pdb"),
@@ -578,6 +583,7 @@ class StageScriptTest(TempDirTestCase):
     def test_input_checks_run_before_the_destination_is_touched(self) -> None:
         cases = {"no ProjectHost": "build/src/app/Debug/project-host/ProjectHostVsProbe.exe.config",
                  "no frost-dbgeng-dap.exe": "build/src/app/Debug/frost-dbgeng-dap.exe",
+                 "no frost-update-apply.exe": "build/src/app/Debug/frost-update-apply.exe",
                  "no resources": "build/src/app/Debug/resources",
                  "no HTTPS backend": "build/src/app/Debug/tls/qschannelbackendd.dll",
                  "the built visualizer pack is missing": "build/src/app/Debug/visualizers/FrostCommon.natvis",
@@ -605,7 +611,7 @@ class StageScriptTest(TempDirTestCase):
         self.assertTrue((destination / "unity" / "com.frostide.editor" / "Editor" / "FrostEditor.cs").is_file())
         self.assertIn("stage: ok", result.stdout)
         for name in ("frost.exe", "frost_app.dll", "crashpad_handler.exe", "conpty.dll", "OpenConsole.exe", "frost.pdb", "Qt6Cored.dll",
-                     "frost-dbgeng-dap.exe", "frost-dbgeng-dap.pdb",
+                     "frost-dbgeng-dap.exe", "frost-dbgeng-dap.pdb", "frost-update-apply.exe", "frost-update-apply.pdb",
                      "platforms/qwindowsd.dll", "platforms/qoffscreend.dll", "resources/themes/dark.json",
                      "tls/qschannelbackendd.dll",
                      "project-host/ProjectHostVsProbe.exe", "project-host/ProjectHostVsProbe.exe.config",
@@ -618,6 +624,8 @@ class StageScriptTest(TempDirTestCase):
         self.assertFalse((destination / "dbgmodel.dll").exists(), "no debugger DLL redistribution")
         self.assertEqual((destination / "frost-dbgeng-dap.exe").read_bytes(),
                          (build / "src/app/Debug/frost-dbgeng-dap.exe").read_bytes())
+        self.assertEqual((destination / "frost-update-apply.exe").read_bytes(),
+                         (build / "src/app/Debug/frost-update-apply.exe").read_bytes())
         self.assertEqual((destination / "licenses/libsodium-copyright.txt").read_bytes(),
                          b"Upstream ISC copyright fixture\n")
         for name in (*_STAGED_HELPERS, "visualizers/FrostCommon.natvis", "lua54/lua.exe", "lua54/lua54.dll",
@@ -671,7 +679,7 @@ class StageScriptTest(TempDirTestCase):
         self.assertTrue((destination / "frost.exe").is_file())
 
     def test_corrupted_staged_conpty_or_dbgeng_adapter_fails(self) -> None:
-        for name in ("conpty.dll", "frost-dbgeng-dap.exe"):
+        for name in ("conpty.dll", "frost-dbgeng-dap.exe", "frost-update-apply.exe"):
             with self.subTest(image=name):
                 build = self._fake_build()
                 deploy = self.tmp / "tamper-deploy.cmd"

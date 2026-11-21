@@ -1,16 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 // Real-process integration tests for SafeUpdater with health check and automatic rollback (FND-11).
 
-#include <frost/io/file_system.hpp>
 #include <frost/io/async_process.hpp>
+#include <frost/io/file_system.hpp>
 #include <frost/io/path.hpp>
 #include <frost/io/process.hpp>
+#include <frost/update/install_handoff.hpp>
 #include <frost/update/safe_updater.hpp>
 #include <frost/update/verification.hpp>
 #include <gtest/gtest.h>
 
-#include <chrono>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -114,6 +115,55 @@ protected:
 };
 
 #ifdef _WIN32
+TEST_F(SafeUpdaterTest, PerUserHandoffCopiesOnlyReceiptOwnedExecutablesAndRuntime) {
+    const auto install = *io::fromStdPath(m_root / "installed");
+    const auto workspace = *io::fromStdPath(m_root / "private");
+    ASSERT_TRUE(m_fs.createDirectories(workspace));
+    const auto digest = [](std::string_view bytes) {
+        const auto release = makeReleaseForBytes(bytes, {}, 0);
+        std::array<char, 65> hex{};
+        sodium_bin2hex(hex.data(), hex.size(), release.digest.data(), release.digest.size());
+        return std::string(hex.data());
+    };
+    const std::string image = "fixture";
+    const auto helperPath = mustJoin(install, kPerUserUpdateHelperName);
+    const auto runtimePath = mustJoin(install, "msvcp140.dll");
+    const auto foreignPath = mustJoin(install, "vcruntime140.dll");
+    std::string receipt = "{\"schema\":1,\"associated\":false,\"files\":{";
+    for (const auto name : {"frost.exe", "frost_app.dll", "LICENSE", "NOTICE", "msvcp140.dll"}) {
+        writeFileWithParents(mustJoin(install, name), image);
+        receipt += "\"" + std::string(name) + "\":\"" + digest(image) + "\",";
+    }
+    receipt += "\"" + std::string(kPerUserUpdateHelperName) + "\":\"" + digest(image) + "\"}}";
+    writeFileWithParents(mustJoin(install, ".frost-install.json"), receipt);
+    writeFileWithParents(helperPath, "tampered helper");
+    auto candidate = stagePerUserUpdateHelper(m_fs, install, workspace);
+    ASSERT_FALSE(candidate);
+    EXPECT_EQ(candidate.error().code(), ErrorCode::PermissionDenied);
+    EXPECT_TRUE(m_fs.listDirectory(workspace)->empty());
+
+    writeFileWithParents(helperPath, image);
+    writeFileWithParents(foreignPath, "unowned runtime");
+    candidate = stagePerUserUpdateHelper(m_fs, install, workspace);
+    ASSERT_FALSE(candidate);
+    EXPECT_EQ(candidate.error().code(), ErrorCode::PermissionDenied);
+    EXPECT_TRUE(m_fs.listDirectory(workspace)->empty());
+    ASSERT_TRUE(m_fs.removeFile(foreignPath));
+
+    writeFileWithParents(runtimePath, "tampered runtime");
+    candidate = stagePerUserUpdateHelper(m_fs, install, workspace);
+    ASSERT_FALSE(candidate);
+    EXPECT_EQ(candidate.error().code(), ErrorCode::PermissionDenied);
+    EXPECT_TRUE(m_fs.listDirectory(workspace)->empty());
+
+    writeFileWithParents(runtimePath, image);
+    candidate = stagePerUserUpdateHelper(m_fs, install, workspace);
+    ASSERT_TRUE(candidate) << candidate.error().describe();
+    EXPECT_EQ(candidate->installReceiptDigest, digest(receipt));
+    EXPECT_EQ(m_fs.readFile(candidate->executable), Result<std::string>(image));
+    EXPECT_EQ(m_fs.readFile(mustJoin(workspace, "msvcp140.dll")), Result<std::string>(image));
+}
+
 TEST_F(SafeUpdaterTest, SideBySidePreservesExistingDirectoryCompression) {
     const HANDLE volumeProbe =
         CreateFileW(m_root.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
@@ -206,8 +256,9 @@ TEST_F(SafeUpdaterTest, PerUserReceiptTracksVerifiedZipAndSurvivesRollback) {
     seed(installDir, oldImage);
     const auto constantHash = digest("fixture");
     const auto oldMarker = "{\"schema\":1,\"associated\":true,\"associationReceipt\":{\"owned\":[]},\"files\":"
-                           "{\"frost.exe\":\"" + digest(oldImage) + "\",\"frost_app.dll\":\"" + constantHash +
-                           "\",\"LICENSE\":\"" + constantHash + "\",\"NOTICE\":\"" + constantHash + "\"}}";
+                           "{\"frost.exe\":\"" +
+                           digest(oldImage) + "\",\"frost_app.dll\":\"" + constantHash + "\",\"LICENSE\":\"" +
+                           constantHash + "\",\"NOTICE\":\"" + constantHash + "\"}}";
     writeFileWithParents(marker, oldMarker);
 
     wchar_t systemDirectory[MAX_PATH]{};

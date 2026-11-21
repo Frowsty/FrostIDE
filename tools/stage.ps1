@@ -9,7 +9,7 @@
 # LICENSE files under licenses\). Release and RelWithDebInfo (and Debug with -BundleTools) also
 # bundle the pinned clangd with its resource directory, lldb-dap, LuaLS (ADR 0079), the managed
 # language server and the managed debugger; a missing one fails the stage (FND-13). Next to the
-# folder, <Destination>-symbols.zip holds all three IDE images with the PDBs whose GUID and
+# folder, <Destination>-symbols.zip holds the IDE and updater images with the PDBs whose GUID and
 # age match them (tools/symbolize.py archive; symbolize.py --symbol-archive reads it). Windows only;
 # tools/stage.sh stages a Linux build.
 # AddressSanitizer builds also carry the pinned runtime DLL, checked against the build's sidecar.
@@ -142,7 +142,7 @@ if (-not $SkipBuild) {
 }
 
 $binDir = Join-Path $BuildDir "src\app\$Config"
-foreach ($name in @('frost.exe', 'frost-clang.exe', 'frost-analyzer.exe', 'frost_app.dll', 'frost-dbgeng-dap.exe', 'crashpad_handler.exe', 'frostide-mcp.exe', 'frost-snapshot-validator.exe', 'frost_held_read.exe', 'conpty.dll', 'OpenConsole.exe')) {
+foreach ($name in @('frost.exe', 'frost-clang.exe', 'frost-analyzer.exe', 'frost_app.dll', 'frost-dbgeng-dap.exe', 'frost-update-apply.exe', 'crashpad_handler.exe', 'frostide-mcp.exe', 'frost-snapshot-validator.exe', 'frost_held_read.exe', 'conpty.dll', 'OpenConsole.exe')) {
     if (-not (Test-Path -LiteralPath (Join-Path $binDir $name))) { Fail "the build tree has no $name in $binDir" }
 }
 $visualizers = Join-Path $binDir 'visualizers'
@@ -245,7 +245,7 @@ $symbolArchive = $Destination.TrimEnd('\', '/') + '-symbols.zip'
 $previous = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
 $out = & $Python -I (Join-Path $PSScriptRoot 'symbolize.py') archive --stage $binDir --pdb-dir $binDir `
-    --check --require frost.exe --require frost_app.dll --require frost-dbgeng-dap.exe 2>&1
+    --check --require frost.exe --require frost_app.dll --require frost-dbgeng-dap.exe --require frost-update-apply.exe 2>&1
 $code = $LASTEXITCODE
 $ErrorActionPreference = $previous
 if ($code -ne 0) {
@@ -284,7 +284,7 @@ if (Test-Path -LiteralPath (Join-Path $binDir 'licenses\Lua-FrostIDE') -PathType
     Copy-Item -LiteralPath (Join-Path $binDir 'licenses\Lua-FrostIDE') -Destination (Join-Path $Destination 'licenses') -Recurse
 }
 # 3. FrostIDE's own files.
-foreach ($name in @('frost.exe', 'frost-clang.exe', 'frost-analyzer.exe', 'frost_app.dll', 'frost-dbgeng-dap.exe', 'crashpad_handler.exe', 'frostide-mcp.exe', 'frost-snapshot-validator.exe', 'frost_held_read.exe', 'conpty.dll', 'OpenConsole.exe')) {
+foreach ($name in @('frost.exe', 'frost-clang.exe', 'frost-analyzer.exe', 'frost_app.dll', 'frost-dbgeng-dap.exe', 'frost-update-apply.exe', 'crashpad_handler.exe', 'frostide-mcp.exe', 'frost-snapshot-validator.exe', 'frost_held_read.exe', 'conpty.dll', 'OpenConsole.exe')) {
     Copy-Item -LiteralPath (Join-Path $binDir $name) -Destination $Destination
 }
 if ($asanRuntime) {
@@ -307,7 +307,7 @@ foreach ($name in @('ProjectHostVsProbe.exe', 'ProjectHostVsProbe.exe.config')) 
     if ($sourceHash -ne $stagedHash) { Fail "the staged ProjectHost $name differs from the build output" }
 }
 if ($Config -ne 'Release') {
-    foreach ($name in @('frost.pdb', 'frost_app.pdb', 'frost-dbgeng-dap.pdb')) {
+    foreach ($name in @('frost.pdb', 'frost_app.pdb', 'frost-dbgeng-dap.pdb', 'frost-update-apply.pdb')) {
         $pdb = Join-Path $binDir $name
         if (Test-Path -LiteralPath $pdb) { Copy-Item -LiteralPath $pdb -Destination $Destination }
     }
@@ -393,7 +393,7 @@ if ($bundle) { Copy-Item -LiteralPath (Join-Path $lualsDest 'LICENSE') -Destinat
 
 # 6. The checks.
 $plugin = if ($Config -eq 'Debug') { 'platforms\qwindowsd.dll' } else { 'platforms\qwindows.dll' }
-foreach ($name in @('frost.exe', 'frost_app.dll', 'frost-dbgeng-dap.exe', 'crashpad_handler.exe', 'frostide-mcp.exe', 'frost-snapshot-validator.exe', 'frost_held_read.exe', 'conpty.dll', 'OpenConsole.exe', 'LICENSE', 'NOTICE', $plugin)) {
+foreach ($name in @('frost.exe', 'frost_app.dll', 'frost-dbgeng-dap.exe', 'frost-update-apply.exe', 'crashpad_handler.exe', 'frostide-mcp.exe', 'frost-snapshot-validator.exe', 'frost_held_read.exe', 'conpty.dll', 'OpenConsole.exe', 'LICENSE', 'NOTICE', $plugin)) {
     if (-not (Test-Path -LiteralPath (Join-Path $Destination $name))) { Fail "the staged folder has no $name" }
 }
 if ((Get-FileHash -LiteralPath $tlsSource -Algorithm SHA256).Hash -ne
@@ -407,9 +407,9 @@ if ($asanRuntime) {
         Fail 'the staged ASan runtime differs from the pinned SDK runtime'
     }
 }
-# The staged ConPTY pair and own DbgEng adapter must match the build output exactly.
+# The staged ConPTY pair, DbgEng adapter and updater must match the build output exactly.
 # DbgEng itself is System32-only: no debugger DLL is copied into this allowlisted payload.
-foreach ($name in @('conpty.dll', 'OpenConsole.exe', 'frost-dbgeng-dap.exe')) {
+foreach ($name in @('conpty.dll', 'OpenConsole.exe', 'frost-dbgeng-dap.exe', 'frost-update-apply.exe')) {
     $sourceHash = (Get-FileHash -LiteralPath (Join-Path $binDir $name) -Algorithm SHA256).Hash
     $stagedHash = (Get-FileHash -LiteralPath (Join-Path $Destination $name) -Algorithm SHA256).Hash
     if ($sourceHash -ne $stagedHash) { Fail "the staged $name differs from the build output" }
@@ -438,7 +438,7 @@ if ($bundle) {
 $previous = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
 $out = & $Python -I (Join-Path $PSScriptRoot 'symbolize.py') archive --stage $Destination --pdb-dir $binDir `
-    --output $symbolArchive --require frost.exe --require frost_app.dll --require frost-dbgeng-dap.exe 2>&1
+    --output $symbolArchive --require frost.exe --require frost_app.dll --require frost-dbgeng-dap.exe --require frost-update-apply.exe 2>&1
 $code = $LASTEXITCODE
 $ErrorActionPreference = $previous
 $out | ForEach-Object { Write-Host "stage: symbols: $_" }

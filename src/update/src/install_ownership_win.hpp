@@ -79,8 +79,7 @@ inline Result<InstallOwnership> parseInstallOwnership(std::string receipt) {
     while (auto* key = yyjson_obj_iter_next(&cursor)) {
         const auto name = receiptString(key);
         const auto hex = receiptString(yyjson_obj_iter_get_val(key));
-        if (!validOwnedName(name) || hex.size() != 64 ||
-            hex.find_first_not_of("0123456789abcdef") != hex.npos ||
+        if (!validOwnedName(name) || hex.size() != 64 || hex.find_first_not_of("0123456789abcdef") != hex.npos ||
             !ownership.files.emplace(name, hex).second)
             return fail(ErrorCode::Corrupt, "Invalid path or hash in the per-user install receipt");
     }
@@ -117,7 +116,8 @@ inline Result<void> hashInstallTree(io::IFileSystem& fs, std::string_view root, 
             continue;
         }
         if (entry.type != io::FileType::Regular)
-            return fail(ErrorCode::Unsupported, "The per-user install tree contains a link or unsupported entry: " + name);
+            return fail(ErrorCode::Unsupported,
+                        "The per-user install tree contains a link or unsupported entry: " + name);
         auto path = io::joinPath(root, name);
         if (!path)
             return std::unexpected(path.error());
@@ -151,12 +151,13 @@ inline Result<void> validateInstallOwnership(io::IFileSystem& fs, std::string_vi
     if (!actual)
         return std::unexpected(actual.error());
     if (*actual != ownership.files)
-        return fail(ErrorCode::Busy, "The per-user install contains modified or foreign files. The update made no changes.");
+        return fail(ErrorCode::Busy,
+                    "The per-user install contains modified or foreign files. The update made no changes.");
     return {};
 }
 
 inline Result<InstallOwnership> writeInstallOwnership(io::IFileSystem& fs, std::string_view stage,
-                                                       const InstallOwnership& previous, std::string_view newFloor) {
+                                                      const InstallOwnership& previous, std::string_view newFloor) {
     auto path = io::joinPath(stage, kInstallReceipt);
     if (!path)
         return std::unexpected(path.error());
@@ -173,15 +174,15 @@ inline Result<InstallOwnership> writeInstallOwnership(io::IFileSystem& fs, std::
     files->emplace(std::string(kReleaseFloor), ownedFileHash(newFloor));
 
     InstallDocument original(yyjson_read(previous.receipt.data(), previous.receipt.size(), 0), yyjson_doc_free);
-    std::unique_ptr<yyjson_mut_doc, decltype(&yyjson_mut_doc_free)> document(yyjson_doc_mut_copy(original.get(), nullptr),
-                                                                          yyjson_mut_doc_free);
+    std::unique_ptr<yyjson_mut_doc, decltype(&yyjson_mut_doc_free)> document(
+        yyjson_doc_mut_copy(original.get(), nullptr), yyjson_mut_doc_free);
     auto* root = yyjson_mut_doc_get_root(document.get());
     auto* owned = yyjson_mut_obj(document.get());
     if (!owned || !yyjson_mut_obj_put(root, yyjson_mut_str(document.get(), "files"), owned))
         return fail(ErrorCode::IoError, "Could not create an updated per-user install receipt");
     for (const auto& [name, hash] : *files) {
         if (!yyjson_mut_obj_add(owned, yyjson_mut_strncpy(document.get(), name.data(), name.size()),
-                               yyjson_mut_strncpy(document.get(), hash.data(), hash.size())))
+                                yyjson_mut_strncpy(document.get(), hash.data(), hash.size())))
             return fail(ErrorCode::IoError, "Could not record an owned update file");
     }
     std::size_t len = 0;

@@ -199,8 +199,8 @@ Result<void> SafeUpdater::copyDirectoryTree(std::string_view srcDir, std::string
     return {};
 }
 
-Result<void> SafeUpdater::moveOrCopyTree(std::string_view srcDir, std::string_view dstDir,
-                                        bool replaceDestination, const detail::InstallOwnership* ownership) const {
+Result<void> SafeUpdater::moveOrCopyTree(std::string_view srcDir, std::string_view dstDir, bool replaceDestination,
+                                         const detail::InstallOwnership* ownership) const {
     if (replaceDestination) {
         if (auto removed = m_fs.removeAll(dstDir); !removed && removed.error().code() != ErrorCode::NotFound)
             return std::unexpected(removed.error());
@@ -455,6 +455,14 @@ Result<UpdateOutcome> SafeUpdater::applyUpdate(const SafeUpdateSpec& spec) const
             requireVerifiedArchive = true;
         }
     }
+#else
+    if (!spec.expectedInstallReceiptDigest.empty())
+        return fail(ErrorCode::Unsupported, "Per-user update ownership is only supported on Windows");
+#endif
+#ifdef _WIN32
+    if (!spec.expectedInstallReceiptDigest.empty() &&
+        (!ownership || detail::ownedFileHash(ownership->receipt) != spec.expectedInstallReceiptDigest))
+        return fail(ErrorCode::Busy, "The authorized per-user install receipt changed before the update");
 #endif
     // Apply the existing directory's policy before creating any payload entries.
     const std::string stageDir = *normBackup + ".stage";
@@ -543,8 +551,9 @@ Result<UpdateOutcome> SafeUpdater::applyUpdate(const SafeUpdateSpec& spec) const
             (void)m_fs.removeAll(stageDir);
             auto restored = moveOrCopyTree(*normBackup, *normInstall, false);
             if (!restored)
-                return fail(ErrorCode::Busy, "The installation changed while moving to backup; the backup was retained: " +
-                                                 restored.error().message());
+                return fail(ErrorCode::Busy,
+                            "The installation changed while moving to backup; the backup was retained: " +
+                                restored.error().message());
             return std::unexpected(verified.error());
         }
     }
@@ -571,8 +580,8 @@ Result<UpdateOutcome> SafeUpdater::applyUpdate(const SafeUpdateSpec& spec) const
         if (hadPreviousInstall) {
             auto restored = moveOrCopyTree(*normBackup, *normInstall, !requireVerifiedArchive, originalOwnership);
             if (!restored && requireVerifiedArchive)
-                return fail(ErrorCode::IoError, "Update publication failed; the backup was retained: " +
-                                                    restored.error().message());
+                return fail(ErrorCode::IoError,
+                            "Update publication failed; the backup was retained: " + restored.error().message());
         }
         return std::unexpected(installed.error());
     }
@@ -670,12 +679,12 @@ Result<UpdateOutcome> SafeUpdater::applyUpdate(const SafeUpdateSpec& spec) const
     if (stagedOwnership) {
         auto previous = detail::validateInstallOwnership(m_fs, *normBackup, *ownership);
         if (!previous)
-            return fail(ErrorCode::Busy, outcome.failureReason + "; rollback retained the changed backup: " +
-                                             previous.error().message());
+            return fail(ErrorCode::Busy, outcome.failureReason +
+                                             "; rollback retained the changed backup: " + previous.error().message());
         auto current = detail::validateInstallOwnership(m_fs, *normInstall, *stagedOwnership);
         if (!current)
-            return fail(ErrorCode::Busy, outcome.failureReason + "; rollback preserved both directories: " +
-                                             current.error().message());
+            return fail(ErrorCode::Busy,
+                        outcome.failureReason + "; rollback preserved both directories: " + current.error().message());
         failedInstall = stageDir + ".failed";
         if (auto moved = moveOrCopyTree(*normInstall, failedInstall, false, candidateOwnership); !moved)
             return fail(ErrorCode::IoError, outcome.failureReason + "; could not preserve the failed installation: " +

@@ -60,6 +60,8 @@ struct SafeUpdateSpec {
     std::vector<std::string> detachedLaunchArgs{};
     // Keep backupDir on disk after a successful update commit.
     bool keepBackupOnSuccess = false;
+    // In-place handoff binds the exact per-user receipt observed by the closing Workbench.
+    std::string expectedInstallReceiptDigest{};
 };
 
 struct UpdateOutcome {

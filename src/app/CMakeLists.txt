@@ -389,6 +389,11 @@ if(FROST_ASAN_RUNTIME_DLL)
 endif()
 # Building frost builds the DLL it loads.
 add_dependencies(frost frost_app_shared frost_held_read)
+frost_add_executable(frost-update-apply LAYER app WIN32
+    SOURCES src/update_apply_main.cpp
+    DEPS frost::update frost::io)
+target_link_options(frost-update-apply PRIVATE /ENTRY:wmainCRTStartup /DEPENDENTLOADFLAG:0xA00)
+add_dependencies(frost frost-update-apply)
 frost_deploy_clang_platform(frost)
 add_dependencies(frost frost-dbgeng-dap)
 # The Windows helper uses the locally installed VS MSBuild assemblies at runtime. Build it with

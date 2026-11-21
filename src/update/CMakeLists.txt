@@ -9,7 +9,7 @@ set(FROST_UPDATE_SOURCES
     src/safe_updater.cpp
 )
 if(WIN32)
-    list(APPEND FROST_UPDATE_SOURCES src/http_client_win.cpp)
+    list(APPEND FROST_UPDATE_SOURCES src/http_client_win.cpp src/install_handoff_win.cpp)
 else()
     find_package(CURL REQUIRED GLOBAL)
     list(APPEND FROST_UPDATE_SOURCES src/http_client_curl.cpp)
