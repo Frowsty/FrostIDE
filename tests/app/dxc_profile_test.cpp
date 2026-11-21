@@ -2,6 +2,7 @@
 // Checks shader compiler arguments, diagnostic parsing, and trust gating.
 #include "frost/io/file_system.hpp"
 #include "frost/io/mem_fs.hpp"
+#include "frost/io/path.hpp"
 #include "frost/io/scripted_process_launcher.hpp"
 
 #include "../../src/app/src/dxc_profile.hpp"
@@ -35,7 +36,9 @@ TEST(DxcProfile, RefusesImplicitCompilerInventedEntryAndShaderLabVariants) {
 }
 TEST(DxcProfile, ActualCompilerFormatLocationsRemainMessagesWithoutInferredSuccess) {
     auto p = profile();
-    auto rows = parseDxcDiagnostics("test.hlsl(4,9) :  error: use of undeclared identifier 'actual'\r\n"
+    const auto source = io::normalizePath(p.source);
+    ASSERT_TRUE(source);
+    auto rows = parseDxcDiagnostics("./nested/../test.hlsl(4,9) :  error: use of undeclared identifier 'actual'\r\n"
                                     "    return actual;\r\n"
                                     "           ^\r\n",
                                     p.root);
@@ -45,7 +48,13 @@ TEST(DxcProfile, ActualCompilerFormatLocationsRemainMessagesWithoutInferredSucce
     EXPECT_EQ(rows->front().diagnostic.column, 9);
     EXPECT_EQ(rows->front().diagnostic.severity, build::Severity::Error);
     EXPECT_TRUE(rows->front().jumpable);
-    EXPECT_EQ(rows->front().path, p.source);
+    EXPECT_EQ(rows->front().path, *source);
+    EXPECT_EQ(rows->front().diagnostic.file, *source);
+    const auto absolute =
+        parseDxcDiagnostics(p.source + "(4,9) : error: use of undeclared identifier 'actual'\n", p.root);
+    ASSERT_TRUE(absolute);
+    ASSERT_EQ(absolute->size(), 1u);
+    EXPECT_EQ(absolute->front().path, rows->front().path);
     EXPECT_EQ(rows->front().diagnostic.message, "use of undeclared identifier 'actual'");
 }
 TEST(DxcProfile, RealCommandRecipeUsesExactArgvAndBoundedDiagnosticCollection) {
@@ -112,6 +121,11 @@ TEST(DxcInstalledCompiler, DiagnosesActualSavedHlslThroughRealCommand) {
     ASSERT_TRUE(report) << report.error().message();
     EXPECT_NE(report->exitCode, 0);
     ASSERT_FALSE(report->diagnostics.empty()) << report->output;
+    const auto source = io::normalizePath(p.source);
+    ASSERT_TRUE(source);
+    EXPECT_TRUE(report->diagnostics.front().jumpable);
+    EXPECT_EQ(report->diagnostics.front().path, *source);
+    EXPECT_EQ(report->diagnostics.front().diagnostic.file, *source);
     EXPECT_EQ(report->diagnostics.front().diagnostic.line, 1);
     EXPECT_NE(report->diagnostics.front().diagnostic.message.find("actual_missing_identifier"), std::string::npos);
 }

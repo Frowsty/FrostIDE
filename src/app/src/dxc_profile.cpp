@@ -62,8 +62,11 @@ Result<std::vector<build::BuildDiagnostic>> parseDxcDiagnostics(std::string_view
         if (auto diagnostic = build::parseDiagnosticLine(line)) {
             build::BuildDiagnostic row;
             row.diagnostic = std::move(*diagnostic);
-            auto path = io::isAbsolutePath(row.diagnostic.file) ? io::normalizePath(row.diagnostic.file)
-                                                                : io::joinPath(root, row.diagnostic.file);
+            auto path = io::isAbsolutePath(row.diagnostic.file)
+                            ? io::normalizePath(row.diagnostic.file)
+                            : io::joinPath(root, row.diagnostic.file).and_then([](const std::string& joined) {
+                                  return io::normalizePath(joined);
+                              });
             if (path && row.diagnostic.line > 0) {
                 row.path = *path;
                 row.diagnostic.file = *path;
