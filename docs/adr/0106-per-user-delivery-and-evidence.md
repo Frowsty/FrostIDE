@@ -36,7 +36,9 @@ The stage must include the source-pinned Lua interpreter, matching shared API li
 A separately configured Lua debugging extension remains user-installed (ADR 0094); it is not silently
 redistributed. Linux stages copy pinned Qt shared libraries, ICU, plugins, translations and SDK notices, with a
 frost wrapper that supplies package-relative loader/plugin paths and executes frost.bin. Release
-staging requires the pinned Qt source archive; system desktop/XCB libraries remain host dependencies.
+staging requires the pinned Qt source archive. Qt and ICU loader aliases are package-relative links to the
+shipped library payload, and the stage refuses aliases that resolve outside that library set. System desktop
+and XCB libraries remain host dependencies.
 
 CLI diff uses the shared read-only editor viewer. Merge uses the shared editable three-way editor and
 atomically replaces output after checking source and output snapshots. It admits bounded UTF-8 text;

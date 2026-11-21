@@ -36,15 +36,29 @@ def stage_qt(repo, sdk, destination, archive=None, debug=False, check_only=False
     if icu and notice_bytes is None:
         raise ValueError('bundled ICU requires the pinned --icu-notice or an SDK notice '
                          '(tools/bootstrap-wsl.sh --only icu-notice)')
-    for path in libraries + [root / 'plugins' / name for name in plugins]:
-        if not path.resolve().is_relative_to(root.resolve()): raise ValueError('Qt input escapes SDK Qt root')
+    sdk_root = root.resolve()
+    sdk_lib = root.joinpath('lib').resolve()
+    library_names = {path.name for path in libraries}
+    sources = {path: path.resolve(strict=True) for path in libraries}
+    for path, source in sources.items():
+        if not source.is_relative_to(sdk_root):
+            raise ValueError('Qt input escapes SDK Qt root')
+        if path.is_symlink() and (source.parent != sdk_lib or source.name not in library_names):
+            raise ValueError('Qt library alias does not resolve to a shipped library')
+    for name in plugins:
+        if not (root / 'plugins' / name).resolve().is_relative_to(sdk_root):
+            raise ValueError('Qt input escapes SDK Qt root')
     if check_only: return
     if archive is not None: copy_qt_source(archive, destination, pin['sources']['qtbase'])
     qt = destination / 'qt'
     (qt / 'lib').mkdir(parents=True)
-    for path in libraries:
-        if not path.resolve().is_relative_to(root.resolve()): raise ValueError('Qt library escapes SDK Qt root')
-        shutil.copy2(path.resolve(), qt / 'lib' / path.name)
+    for path, source in sources.items():
+        target = qt / 'lib' / path.name
+        if path.is_symlink():
+            # Keep every runtime name while sharing one relocatable, verified payload.
+            target.symlink_to(source.name)
+        else:
+            shutil.copy2(source, target)
     for name in plugins:
         target = qt / 'plugins' / name
         target.parent.mkdir(parents=True, exist_ok=True)

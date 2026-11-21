@@ -100,10 +100,13 @@ class StageShTest(TempDirTestCase):
         (self.stage_repository / "sdk/sdk.lock.json").write_text(json.dumps(lock), encoding="utf-8")
         (sdk / LUALS / "script/files.lua").write_bytes(b"modified installed script")
         qt_version = lock["qt"]["version"]
-        for name in ('lib/libQt6Core.so.6', 'plugins/platforms/libqxcb.so', 'plugins/platforms/libqoffscreen.so', 'plugins/tls/libqopensslbackend.so'):
+        for name in (f'lib/libQt6Core.so.{qt_version}', 'plugins/platforms/libqxcb.so', 'plugins/platforms/libqoffscreen.so', 'plugins/tls/libqopensslbackend.so'):
             path = sdk / 'qt' / qt_version / 'gcc_64' / name
             path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile('/bin/true', path)
+        qt_lib = sdk / 'qt' / qt_version / 'gcc_64/lib'
+        (qt_lib / 'libQt6Core.so.6').symlink_to(f'libQt6Core.so.{qt_version}')
+        (qt_lib / 'libQt6Core.so').symlink_to('libQt6Core.so.6')
         return sdk
 
     def _stage(self, build: Path, sdk: Path, destination: Path, *extra: str) -> subprocess.CompletedProcess:
@@ -112,6 +115,27 @@ class StageShTest(TempDirTestCase):
         return subprocess.run(["bash", str(self.stage_repository / "tools/stage.sh"), "--dest", str(destination), "--config", "Debug",
                                "--build-dir", str(build), "--sdk-root", str(sdk), "--skip-build", *extra],
                               capture_output=True, text=True, env=env, check=False)
+
+    def test_qt_library_aliases_share_a_relocatable_payload(self) -> None:
+        sdk = self._fake_sdk()
+        destination = self.tmp / 'stage'
+        destination.mkdir()
+        shutil.copyfile('/bin/true', destination / 'frost')
+        stage_qt(self.stage_repository, sdk, destination, debug=True)
+        lib = destination / 'qt/lib'
+        lock = json.loads((self.stage_repository / 'sdk/sdk.lock.json').read_text(encoding='utf-8'))
+        payload = Path(f'libQt6Core.so.{lock["qt"]["version"]}')
+        for alias in ('libQt6Core.so', 'libQt6Core.so.6'):
+            self.assertEqual((lib / alias).readlink(), payload)
+            self.assertEqual((lib / alias).read_bytes(), (lib / payload).read_bytes())
+        qt = sdk / 'qt' / lock['qt']['version'] / 'gcc_64'
+        unshipped = qt / 'other.so'
+        unshipped.write_bytes(b'not a staged library')
+        alias = qt / 'lib/libQt6Core.so'
+        alias.unlink()
+        alias.symlink_to('../other.so')
+        with self.assertRaisesRegex(ValueError, 'does not resolve to a shipped library'):
+            stage_qt(self.stage_repository, sdk, destination, debug=True, check_only=True)
 
     def test_frost_and_the_bundled_tools_are_staged_in_the_locator_layout(self) -> None:
         build, sdk = self._fake_build(), self._fake_sdk()
