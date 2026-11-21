@@ -7,6 +7,7 @@
 #              [-Label text] [-PerfRoot E:\FrostBuilds\perf] [-Milestone m1] [-BuildDir build\win-clangcl]
 #              [-LockRecord <file>] [-Restore <run dir>]
 #   powershell -ExecutionPolicy Bypass -File tools\perf.ps1 -Budget B28 -B28ReleaseProbe <s1_probe_validate.exe>
+#   powershell -ExecutionPolicy Bypass -File tools\perf.ps1 -Budget B20 -B20Config <private run inputs.json>
 #   powershell -ExecutionPolicy Bypass -File tools\perf.ps1 -Full
 #              [-FullManifest <file> -FullManifestSha256 <independently-reviewed SHA-256>]
 #

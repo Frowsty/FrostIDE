@@ -1718,7 +1718,7 @@ HARNESSES: dict[str, type] = {"B28": B28Harness}
 _OPTIONS = ("list", "budget", "variant", "runs", "warmup", "files", "label", "perf-root", "milestone",
             "build-dir", "restore", "lock-record", "repo", "package-dir", "package-archive", "package-sha256",
             "b14-fixture", "b14-source", "b14-git", "b14-session-probe",
-            "full", "full-manifest", "full-manifest-sha256", "b28-release-probe")
+            "full", "full-manifest", "full-manifest-sha256", "b28-release-probe", "b20-config")
 _FLAGS = {"list"}
 
 
@@ -1752,6 +1752,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--full-manifest", help="independently reviewed full measurement manifest")
     parser.add_argument("--full-manifest-sha256", help="independently obtained SHA-256 of that manifest")
     parser.add_argument("--b28-release-probe", help="native session probe for the fixed release B28 workload")
+    parser.add_argument("--b20-config", help="B20 workspace, private trust receipt, probes and output paths")
     parser.add_argument("--variant", action="append", help="variants to run, comma-separated (default: all)")
     parser.add_argument("--runs", type=int, help="counted runs (rounds for rebuild) per variant")
     parser.add_argument("--warmup", type=int, help="warm-up runs per variant")
@@ -1793,7 +1794,7 @@ def cmd_list(budgets_json: Path) -> int:
     """Prints every budget: ID, metric, gate and whether a harness exists. Returns 0."""
     for entry in load_budgets(budgets_json):
         gate = ", ".join(str(g.get("milestone")) for g in entry.get("gate", []))
-        harness = "harness" if entry.get("id") in HARNESSES or entry.get("id") in {"B14", "B27"} else "no harness"
+        harness = "harness" if entry.get("id") in HARNESSES or entry.get("id") in {"B14", "B20", "B27"} else "no harness"
         print(f"{entry.get('id'):4} gate {gate:9} {harness:10}  {entry.get('metric')}")
     return EXIT_OK
 
@@ -1836,7 +1837,7 @@ def cmd_full(repo: Path, args: argparse.Namespace) -> int:
                                        args.perf_root, args.milestone, args.build_dir, args.lock_record,
                                        args.package_dir, args.package_archive, args.package_sha256,
                                        args.b14_fixture, args.b14_source, args.b14_git, args.b14_session_probe,
-                                       args.b28_release_probe)
+                                       args.b28_release_probe, args.b20_config)
     ):
         raise PerfError("-Full cannot be combined with a single-budget operation")
     if bool(args.full_manifest) != bool(args.full_manifest_sha256):
@@ -1916,6 +1917,144 @@ def cmd_full(repo: Path, args: argparse.Namespace) -> int:
     return EXIT_INVALID if incomplete else EXIT_OVER if state == "over" else EXIT_OK
 
 
+def _b20_sample(command: list[str], cwd: Path, env: dict[str, str], tick: int) -> tuple[int, bytes, bytes]:
+    deadline = time.monotonic() + 75
+    _b14_check_input(tick, "B20")
+    with subprocess.Popen(command, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
+        try:
+            while True:
+                _b14_check_input(tick, "B20")
+                try:
+                    stdout, stderr = process.communicate(timeout=0.05)
+                    break
+                except subprocess.TimeoutExpired:
+                    if time.monotonic() >= deadline:
+                        raise RunInvalid("the owned B20 native probe timed out")
+            _b14_check_input(tick, "B20")
+        finally:
+            if process.poll() is None:
+                # s1_exit owns FrostIDE and its descendants in a kill-on-close Job Object.
+                process.kill()
+    return process.returncode, stdout, stderr
+
+
+def run_b20(repo: Path, args: argparse.Namespace) -> int:
+    """Collect native R3 close-to-exit measurements on REF-W1."""
+    if os.name != "nt" or not args.b20_config:
+        raise PerfError("B20 requires native Windows and -B20Config")
+    if any(value is not None for value in (args.variant, args.files, args.runs, args.warmup, args.build_dir,
+                                           args.lock_record, args.perf_root, args.label, args.milestone,
+                                           args.b28_release_probe)):
+        raise PerfError("B20 fixes the R3 workload and sample count")
+    try:
+        config = json.loads(Path(args.b20_config).read_text(encoding="utf-8"))
+        if set(config) != {"frost", "corpus", "exitProbe", "sessionProbe", "trustedRoots", "results"}:
+            raise RunInvalid("B20 config must identify its binaries, pinned corpus, trusted roots and new results")
+        if any(not Path(value).is_absolute() for value in config.values()):
+            raise RunInvalid("B20 config paths must be absolute")
+        paths = {key: Path(value).resolve(strict=key != "results") for key, value in config.items()}
+        corpus, frost, probe, session = (paths[key] for key in ("corpus", "frost", "exitProbe", "sessionProbe"))
+        if (frost.name.lower(), probe.name.lower(), session.name.lower()) != (
+            "frost.exe", "s1_exit.exe", "s1_probe_validate.exe"
+        ):
+            raise RunInvalid("B20 requires the named FrostIDE launcher and two native probes")
+        project = (corpus / "llvm").resolve(strict=True)
+        if corpus.drive.upper() != "E:" or project.parent != corpus or not (project / "CMakeLists.txt").is_file():
+            raise RunInvalid("B20 requires the pinned E: R3 llvm-project workspace")
+        trust = paths["trustedRoots"].read_bytes()
+        lines = trust.decode("utf-8-sig").splitlines()
+        if len(lines) != 2 or lines[0] != "# FrostIDE trusted roots v1" or Path(lines[1]).resolve() != project:
+            raise RunInvalid("provide the private FrostIDE trust receipt containing exactly the approved R3 root")
+        manifest = repo / "tests/corpus/manifest.json"
+        pin, = (entry["sha"] for entry in json.loads(manifest.read_text(encoding="utf-8"))["corpora"]
+                if entry["id"] == "R3")
+        if not re.fullmatch("[a-f0-9]{40}", pin):
+            raise RunInvalid("invalid R3 corpus pin")
+        result_dir = paths["results"]
+        if result_dir.is_relative_to(corpus) or result_dir.is_relative_to(frost.parent):
+            raise RunInvalid("B20 result and private profiles belong outside the corpus and package")
+        result_dir.mkdir()
+        git_name = shutil.which("git")
+        if not git_name:
+            raise RunInvalid("Git is required to identify the R3 checkout")
+        git = Path(git_name).resolve()
+        git_env = _b14_environment(result_dir)
+
+        def check_corpus() -> None:
+            cmd = ("--no-optional-locks", "-c", "core.fsmonitor=false")
+            if Path(_b14_git(git, corpus, git_env, *cmd, "rev-parse", "--show-toplevel").decode().strip()) != corpus:
+                raise RunInvalid("B20 corpus path is not the repository root")
+            if _b14_git(git, corpus, git_env, *cmd, "rev-parse", "--verify", "HEAD").decode().strip() != pin or (
+                _b14_git(git, corpus, git_env, *cmd, "rev-parse", "--abbrev-ref", "HEAD").strip() != b"HEAD"
+            ):
+                raise RunInvalid("B20 requires the exact detached R3 commit")
+            if _b14_git(git, corpus, git_env, *cmd, "status", "--porcelain=v2", "--untracked-files=all",
+                        "--ignored=matching"):
+                raise RunInvalid("the R3 checkout contains tracked, untracked or ignored changes")
+            index = _b14_git(git, corpus, git_env, *cmd, "ls-files", "-v", "-z").split(b"\0")
+            if not index[0] or any(not record.startswith(b"H ") for record in index[:-1]):
+                raise RunInvalid("R3 contains nonstandard, skipped or assumed-unchanged files")
+
+        check_corpus()
+        images = {"frost": frost, "app": frost.with_name("frost_app.dll"), "exitProbe": probe, "sessionProbe": session}
+        hashes = {key: _b14_digest(path) for key, path in images.items()}
+        tick = _b14_input_tick()
+        start = _utc_now()
+        before, initial_cpu = _ref_w1_session(session, "B20"), _system_cpu_percent(3, time.sleep)
+        _b14_check_input(tick, "B20")
+        if initial_cpu is None or not 0 <= initial_cpu <= 5:
+            raise RunInvalid("machine was not quiet before B20")
+        samples = []
+        for index in range(20):
+            _b14_check_input(tick, "B20")
+            profile = result_dir / f"profile-{index:02d}"
+            data = profile / "FrostIDE/data"
+            data.mkdir(parents=True)
+            (data / "trusted-roots.txt").write_bytes(trust)
+            env = {key: val for key, val in os.environ.items()
+                   if not key.startswith(("QT_", "FROST_AUTOMATION_"))}
+            env.update(APPDATA=str(profile), LOCALAPPDATA=str(profile))
+            code, stdout, stderr = _b20_sample([str(probe), str(frost), str(project)], result_dir, env, tick)
+            (result_dir / f"sample-{index:02d}.json").write_bytes(stdout)
+            (result_dir / f"sample-{index:02d}.stderr").write_bytes(stderr)
+            if code:
+                raise RunInvalid(f"B20 sample {index + 1} did not exit naturally; see the saved stderr")
+            row = json.loads(stdout)
+            if row["tool"] != "s1_exit" or row["exit"] != 0 or Path(row["workspace"]) != project or (
+                Path(row["sessionIndex"]) != data / "sessions/index.json"
+            ) or type(row["pid"]) is not int or row["pid"] <= 0:
+                raise RunInvalid("B20 native probe did not verify the intended workspace and owned process")
+            if type(row["exitMs"]) not in (int, float) or not math.isfinite(row["exitMs"]) or row["exitMs"] <= 0:
+                raise RunInvalid("B20 has an invalid native exit latency")
+            samples.append(row)
+        check_corpus()
+        after, final_cpu = _ref_w1_session(session, "B20"), _system_cpu_percent(3, time.sleep)
+        if final_cpu is None or not 0 <= final_cpu <= 5 or (
+            hashes != {key: _b14_digest(path) for key, path in images.items()}
+        ) or _b14_digest(paths["trustedRoots"]) != sha256(trust):
+            raise RunInvalid("B20 final idle, image or trust integrity check failed")
+        _b14_check_input(tick, "B20")
+        budget = load_budget(repo / BUDGETS_FILE, "B20")
+        values = [row["exitMs"] for row in samples]
+        stats = {name: percentile_value(values, name) for name in ("p50", "p99")}
+        over = any(stats[target.percentile] > target.max for target in budget.targets)
+        receipt = {"budget": "B20", "corpus": "R3", "workload": "trusted-r3-wm-close", "state": "over" if over else "within",
+                   "corpusCommit": pin, "workspace": str(project), "samples": samples, "statisticsMs": stats,
+                   "startUtc": start, "endUtc": _utc_now(), "sessionStart": before, "sessionEnd": after,
+                   "initialCpuPct": initial_cpu, "finalCpuPct": final_cpu, "inputUnchanged": True,
+                   "runnerSha256": _b14_digest(Path(__file__)), "imagesSha256": hashes, "trustSha256": sha256(trust)}
+        write_json_atomic(result_dir / "summary.json", receipt)
+        print(json.dumps(receipt))
+    except KeyboardInterrupt:
+        print("perf: B20 invalid: interrupted", file=sys.stderr)
+        return EXIT_INVALID
+    except (OSError, ValueError, KeyError, TypeError, RunInvalid, subprocess.TimeoutExpired) as error:
+        print(f"perf: B20 invalid: {error}", file=sys.stderr)
+        return EXIT_INVALID
+    return EXIT_OVER if over else EXIT_OK
+
+
 def _b28_release_start(ctx: RunContext, probe: Path) -> dict[str, Any]:
     if ctx.repo.drive.upper() != "E:" or ctx.build_dir.resolve() != ctx.repo / B28_DEFAULT_BUILD_DIR:
         raise RunInvalid("release B28 requires its own default build tree on the REF-W1 E: volume")
@@ -1947,7 +2086,7 @@ def _b28_release_start(ctx: RunContext, probe: Path) -> dict[str, Any]:
         tools[name] = _b14_digest(tool_path)
         tool_paths[name] = str(tool_path)
     ctx.release_input_tick = _b14_input_tick()
-    before = _b28_release_session(probe)
+    before = _ref_w1_session(probe, "B28")
     cpu = _system_cpu_percent(ctx.hooks.cpu_sample_s, ctx.hooks.sleep)
     ctx.check_release_input()
     if cpu is None or cpu < 0 or cpu > 5:
@@ -1957,21 +2096,21 @@ def _b28_release_start(ctx: RunContext, probe: Path) -> dict[str, Any]:
             "toolsSha256": tools, "toolsPath": tool_paths}
 
 
-def _b28_release_session(probe: Path) -> dict[str, Any]:
+def _ref_w1_session(probe: Path, budget: str) -> dict[str, Any]:
     try:
         report = _b14_session(probe)
         if report["displayPower"] != "on" or not any(
             item.get("attached") is True and (item.get("width"), item.get("height"), item.get("refreshHz")) ==
             (5120, 1440, 144) for item in report["outputs"]
         ):
-            raise RunInvalid("release B28 needs the powered REF-W1 display mode")
+            raise RunInvalid(f"release {budget} needs the powered REF-W1 display mode")
         return report
     except (ValueError, KeyError, TypeError, AttributeError) as error:
-        raise RunInvalid("malformed B28 native console precheck") from error
+        raise RunInvalid(f"malformed {budget} native console precheck") from error
 
 
 def _b28_release_end(ctx: RunContext, probe: Path, receipt: dict[str, Any]) -> None:
-    after = _b28_release_session(probe)
+    after = _ref_w1_session(probe, "B28")
     cpu = _system_cpu_percent(ctx.hooks.cpu_sample_s, ctx.hooks.sleep)
     ctx.check_release_input()
     if cpu is None or cpu < 0 or cpu > 5:
@@ -2001,6 +2140,8 @@ def _run(args: argparse.Namespace, injected: Tools | None, hooks: Hooks) -> int:
         return cmd_restore(Path(args.restore))
 
     budget = load_budget(budgets_json, args.budget or "B28")
+    if args.b20_config and budget.id != "B20":
+        raise PerfError("-B20Config requires B20")
     if args.b28_release_probe:
         if budget.id != "B28" or sys.platform != "win32":
             raise PerfError("-B28ReleaseProbe requires B28 on Windows")
@@ -2013,6 +2154,8 @@ def _run(args: argparse.Namespace, injected: Tools | None, hooks: Hooks) -> int:
         return cmd_installed_size(budget, args)
     if args.package_dir or args.package_archive or args.package_sha256:
         raise PerfError("package arguments require --budget B27")
+    if budget.id == "B20":
+        return run_b20(repo, args)
     if budget.id == "B14":
         return run_b14(args, repo, budget)
     harness_type = HARNESSES.get(budget.id)

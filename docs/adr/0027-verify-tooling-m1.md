@@ -35,6 +35,26 @@ and its lowercase hexadecimal `sha256`. The identity contains the full
   recomputes absolute p50 and p99 and compares medians using a two-sided exact
   permutation Mann–Whitney U test with midranks for ties. Both p<0.01 and a
   median regression greater than 5% are required to fail the comparative gate.
+- **B20** accepts `current` and `baseline` references to `B20-native` envelopes.
+  Run `tools/perf.ps1 -Budget B20 -B20Config <inputs.json>` with absolute paths
+  for `frost`, `corpus`, `exitProbe`, `sessionProbe`, `trustedRoots`, and a new
+  `results` directory. Build `s1_exit` and `s1_probe_validate` from the candidate.
+  Supply the exact package launcher and a clean detached R3 checkout on E:.
+  The trust input must be a private FrostIDE trust receipt containing only the
+  operator-approved R3 `llvm` root. Each launch copies it into a fresh AppData
+  directory. No settings from the normal profile are copied.
+  The native probe checks the committed private Workbench session and owned
+  project title before timing `WM_CLOSE` through the original process handle.
+  A forced close or nonzero exit invalidates the sample. The run requires
+  all 20 native samples, powered console checks, idle checkpoints and
+  uninterrupted desktop input. Use the same R3 path, trust input and probe
+  binaries for the earlier source revision. Keep the original sample files for
+  review and put the collector's summary under `native` in each envelope.
+  Add independently reviewed `applicationImages` and `probeImages` file
+  references to the envelope. Each inventory records `sourceCommit`,
+  `sdkLockSha256`, and a `files` map of the corresponding PE filenames to
+  lowercase SHA-256. Application inventories bind their own tested revision.
+  Probe inventories bind the candidate.
 - **B27** uses the reviewed candidate `identity`, `platform: "windows"`,
   relative `installed` and `archive` paths, and `archiveSha256`. The existing
   native collector verifies the complete archive expansion and reads actual
@@ -72,7 +92,7 @@ and its lowercase hexadecimal `sha256`. The identity contains the full
 
 Exit 3 means incomplete or invalid. Per-budget detail retains available
 failures. A complete run with an exceeded budget would exit 1, and a complete
-run within all limits would exit 0. All rows outside B14, B27 and B28 remain
+run within all limits would exit 0. All rows outside B14, B20, B27 and B28 remain
 blocked in this implementation. B1 and B7 currently produce component
 evidence. Full-run adapters for these budgets and instruments for the other
 rows remain open. Performance history and the 14-day release streak are

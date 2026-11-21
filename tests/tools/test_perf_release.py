@@ -186,6 +186,63 @@ class FullPerformanceTest(TempDirTestCase):
 
 
 
+
+    def b20_native(self, old=False, tamper=None):
+        label = "baseline" if old else "candidate"
+        envelope = self.receipt(old=old, kind="B20-native")
+        session = envelope["native"]["sessionStart"]
+        workspace = "E:/perf-fixture/R3/llvm"
+        samples = [
+            {"tool": "s1_exit", "pid": 100 + index, "workspace": workspace, "exit": 0,
+             "sessionIndex": f"E:/perf-fixture/{label}/profile-{index:02d}/FrostIDE/data/sessions/index.json",
+             "exitMs": 100.0 if old else 110.0}
+            for index in range(20)
+        ]
+        native = {
+            "budget": "B20", "corpus": "R3", "corpusCommit": self.pin, "workload": "trusted-r3-wm-close",
+            "state": "within", "inputUnchanged": True, "workspace": workspace, "samples": samples,
+            "startUtc": envelope["startUtc"], "endUtc": envelope["endUtc"],
+            "sessionStart": session, "sessionEnd": session, "initialCpuPct": 2.0, "finalCpuPct": 4.0,
+            "imagesSha256": {key: "a" * 64 for key in ("frost", "app", "exitProbe", "sessionProbe")},
+            "runnerSha256": self.runner_sha, "trustSha256": "b" * 64,
+        }
+        if tamper:
+            tamper(native)
+        envelope["native"] = native
+        envelope["applicationImages"] = self.write(f"{label}-b20-app-images.json", {
+            "sourceCommit": envelope["identity"]["commit"], "sdkLockSha256": self.identity["lockSha256"],
+            "files": {"frost.exe": "a" * 64, "frost_app.dll": "a" * 64},
+        })
+        envelope["probeImages"] = self.write(f"{label}-b20-probe-images.json", {
+            "sourceCommit": self.identity["commit"], "sdkLockSha256": self.identity["lockSha256"],
+            "files": {"s1_exit.exe": "a" * 64, "s1_probe_validate.exe": "a" * 64},
+        })
+        return self.write(f"{label}-b20-envelope.json", envelope)
+
+    def test_b20_uses_real_latency_sample_fields_and_independent_baseline(self):
+        self.plan["budgets"]["B20"] = {"current": self.b20_native(), "baseline": self.b20_native(old=True)}
+        outcome = self.cli()["budgets"]["B20"]
+        self.assertEqual(outcome["state"], "over")
+        self.assertEqual(outcome["currentP99Ms"], 110)
+        self.assertTrue(outcome["comparativeExceeded"])
+        self.assertFalse(outcome["absoluteExceeded"])
+
+    def test_b20_rejects_unproved_workspace_and_unnatural_exit(self):
+        predecessor = self.b20_native(old=True)
+        for mutation, reason in (
+            (lambda proof: proof["samples"].pop(), "all 20"),
+            (lambda proof: proof["samples"][0].update(workspace="E:/other/llvm"), "fresh project session"),
+            (lambda proof: proof["samples"][1].update(sessionIndex=proof["samples"][0]["sessionIndex"]),
+             "fresh project session"),
+            (lambda proof: proof["samples"][0].update(exit=1), "natural exit"),
+            (lambda proof: proof["imagesSha256"].update(exitProbe="e" * 64), "reviewed build inventory"),
+        ):
+            with self.subTest(reason=reason):
+                self.plan["budgets"]["B20"] = {"current": self.b20_native(tamper=mutation), "baseline": predecessor}
+                outcome = self.cli()["budgets"]["B20"]
+                self.assertEqual(outcome["state"], "invalid")
+                self.assertIn(reason, outcome["reason"])
+
     def b28_native(self, old=False, tamper=None):
         label = "baseline" if old else "candidate"
         envelope = self.receipt(old=old, kind="B28-native")
@@ -356,6 +413,20 @@ class B28InputTest(unittest.TestCase):
                 frost_perf.run_streamed([sys.executable, "-c", child, grandchild, str(marker)],
                                         log=out / "owned.log", clock=clock, timeout=10, drain_on_abort=True)
             self.assertTrue(marker.is_file())
+
+
+class B20InputTest(unittest.TestCase):
+    def test_desktop_input_kills_only_the_owned_native_probe(self):
+        native = Mock()
+        native.poll.return_value = None
+        native.communicate.side_effect = frost_perf.subprocess.TimeoutExpired("probe", 0.05)
+        process = unittest.mock.MagicMock()
+        process.__enter__.return_value = native
+        with (patch.object(frost_perf.subprocess, "Popen", return_value=process),
+              patch.object(frost_perf, "_b14_input_tick", side_effect=[123, 123, 124]),
+              self.assertRaisesRegex(frost_perf.RunInvalid, "input interrupted the B20 run")):
+            frost_perf._b20_sample(["s1_exit"], Path("."), {}, 123)
+        native.kill.assert_called_once()
 
 
 if __name__ == "__main__":

@@ -336,13 +336,92 @@ def check_b28(root, entry, identity, environment, budget, percentile, verify_rev
             "series": result}
 
 
+def validate_b20(root, envelope, pin, revision, runner_revision, verify_revision):
+    native = envelope["native"]
+    if (native.get("budget"), native.get("corpus"), native.get("corpusCommit"), native.get("workload")) != (
+        "B20", "R3", pin, "trusted-r3-wm-close"
+    ):
+        raise ValueError("B20 requires the verified native pinned R3 shutdown workload")
+    workspace = PureWindowsPath(native["workspace"])
+    if not workspace.is_absolute() or workspace.drive.upper() != "E:" or workspace.name.lower() != "llvm" or (
+        ".." in workspace.parts
+    ):
+        raise ValueError("B20 requires the REF-W1 E: llvm workspace")
+    if native.get("state") not in ("within", "over") or native.get("inputUnchanged") is not True:
+        raise ValueError("B20 was interrupted or did not finish")
+    if (timestamp(envelope["startUtc"]) > timestamp(native["startUtc"]) or
+        timestamp(envelope["endUtc"]) < timestamp(native["endUtc"]) or
+        timestamp(native["startUtc"]) >= timestamp(native["endUtc"])):
+        raise ValueError("B20 native timing falls outside the reviewed interval")
+    for key in ("sessionStart", "sessionEnd"):
+        validate_session(native[key])
+    for key in ("initialCpuPct", "finalCpuPct"):
+        value = native[key]
+        if type(value) not in (int, float) or not 0 <= value <= 5:
+            raise ValueError("B20 native idle checkpoint did not pass")
+    images = native["imagesSha256"]
+    if set(images) != {"frost", "app", "exitProbe", "sessionProbe"} or any(
+        not _HEX.fullmatch(digest) for digest in images.values()
+    ) or not _HEX.fullmatch(native["trustSha256"]):
+        raise ValueError("B20 image or private trust provenance is incomplete")
+    for key, producer, members in (
+        ("applicationImages", revision, {"frost": "frost.exe", "app": "frost_app.dll"}),
+        ("probeImages", runner_revision,
+         {"exitProbe": "s1_exit.exe", "sessionProbe": "s1_probe_validate.exe"}),
+    ):
+        build = bound_json(root, envelope[key])
+        if build["sourceCommit"] != producer or build["sdkLockSha256"] != envelope["identity"]["lockSha256"] or any(
+            build["files"].get(filename) != images[image] for image, filename in members.items()
+        ):
+            raise ValueError("B20 measured PE hashes differ from the independently reviewed build inventory")
+    verify_revision(revision, native["runnerSha256"], runner_revision)
+    samples = native["samples"]
+    if not isinstance(samples, list) or len(samples) != 20:
+        raise ValueError("B20 needs all 20 native samples")
+    indexes = set()
+    values = []
+    for row in samples:
+        path = PureWindowsPath(row["sessionIndex"])
+        value = row["exitMs"]
+        if row["tool"] != "s1_exit" or type(row["exit"]) is not int or row["exit"] != 0 or (
+            type(row["pid"]) is not int or row["pid"] <= 0
+        ) or PureWindowsPath(row["workspace"]) != workspace or not path.is_absolute() or (
+            path.parts[-4:] != ("FrostIDE", "data", "sessions", "index.json") or path in indexes
+        ) or type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
+            raise ValueError("B20 sample lacks a fresh project session, owned natural exit or valid latency")
+        indexes.add(path)
+        values.append(value)
+    return values, workspace
+
+
+def check_b20(root, entry, identity, environment, pin, budget, percentile, verify_revision):
+    candidate, baseline = reviewed_pair(root, entry, identity, environment, "B20-native")
+    current, workspace = validate_b20(root, candidate, pin, candidate["identity"]["commit"], identity["commit"],
+                                      verify_revision)
+    previous, old_workspace = validate_b20(root, baseline, pin, baseline["identity"]["commit"], identity["commit"],
+                                           verify_revision)
+    new, old = candidate["native"], baseline["native"]
+    if workspace != old_workspace or new["trustSha256"] != old["trustSha256"] or any(
+        new["imagesSha256"][key] != old["imagesSha256"][key] for key in ("exitProbe", "sessionProbe")
+    ):
+        raise ValueError("B20 baseline used a different workspace, trust scope or probe")
+    limits = {target["percentile"]: target["max"] for target in budget["targets"] if target["unit"] == "ms"}
+    if set(limits) != {"p50", "p99"}:
+        raise ValueError("B20 requires p50 and p99 budget limits in ms")
+    result = comparative(current, previous, limits["p50"], percentile)
+    result["currentP99Ms"] = percentile(current, "p99")
+    if result["currentP99Ms"] > limits["p99"]:
+        result.update(state="over", absoluteExceeded=True)
+    return result
+
+
 def run_full(rows, identity, pin, manifest_path, manifest_sha, command, percentile, measure_b27, verify_revision):
     if sorted(row["id"] for row in rows) != sorted(f"B{i}" for i in range(1, 29)):
         raise ValueError("full performance run requires exactly the 28 registered budgets")
     outcomes = {row["id"]: {"state": "blocked", "metric": row["metric"], "requiredMethod": row["method"],
                             "reason": _COMPONENTS.get(row["id"], "No release-qualified instrument is wired.")}
                 for row in rows}
-    for key in ("B14", "B27", "B28"):
+    for key in ("B14", "B20", "B27", "B28"):
         outcomes[key]["reason"] = "Independently reviewed measurement inputs are required."
     if manifest_path is None:
         return outcomes
@@ -365,13 +444,16 @@ def run_full(rows, identity, pin, manifest_path, manifest_sha, command, percenti
     if not isinstance(inputs, dict) or not inputs.keys() <= outcomes.keys():
         raise ValueError("full manifest contains an unknown budget")
     by_id = {row["id"]: row for row in rows}
-    for key in ("B14", "B27", "B28"):
+    for key in ("B14", "B20", "B27", "B28"):
         if key not in inputs:
             continue
         try:
             if key == "B14":
                 item = check_b14(root, inputs[key], identity, environment_entry["sha256"], pin,
                                  by_id[key], command, percentile, verify_revision)
+            elif key == "B20":
+                item = check_b20(root, inputs[key], identity, environment_entry["sha256"], pin,
+                                 by_id[key], percentile, verify_revision)
             elif key == "B28":
                 item = check_b28(root, inputs[key], identity, environment_entry["sha256"], by_id[key],
                                  percentile, verify_revision)
