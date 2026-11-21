@@ -133,7 +133,7 @@ llvm::json::Object index(const llvm::json::Object& request, llvm::StringRef reso
     std::string error;
     const auto refuse = [](llvm::StringRef reason) {
         return llvm::json::Object{
-            {"kind", "frost-semantic-index"}, {"schema", 1}, {"status", "unavailable"}, {"error", reason}};
+            {"kind", "frost-semantic-index"}, {"schema", 1}, {"status", "unavailable"}, {"error", reason.str()}};
     };
     auto command = semanticCommand(request, resource, error);
     if (!command)

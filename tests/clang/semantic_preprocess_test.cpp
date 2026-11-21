@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// CPP-13 authored real -E oracle, include/macro callbacks and changed-input refusal. Not run.
+// CPP-13 real -E oracle, include/macro callbacks and changed-input refusal.
 #include "frost/io/file_system.hpp"
 #include "frost/io/path.hpp"
 #include "frost/io/process.hpp"
@@ -28,12 +28,11 @@ TEST(SemanticPreprocessor, ExpandedSourceEqualsPinnedClangEAndRetainsActualEvent
                                            .set("file", source)
                                            .set("arguments", Json::array(std::move(argv)))})
                               .dump();
-    const auto payload = Json::object()
-                             .set("projectRoot", scratch.path())
-                             .set("configuration", "test")
-                             .set("compilationDatabase", database)
-                             .set("commandIndex", 0)
-                             .dump();
+    auto request = Json::object()
+                       .set("projectRoot", scratch.path())
+                       .set("configuration", "test")
+                       .set("compilationDatabase", database)
+                       .set("commandIndex", 0);
     frost::io::ProcessSpec helper;
     helper.executable = frost::io::normalizePath(FROST_CLANG_BINARY).value();
     helper.arguments = {"--preprocess-unit"};
@@ -42,7 +41,7 @@ TEST(SemanticPreprocessor, ExpandedSourceEqualsPinnedClangEAndRetainsActualEvent
     helper.environment.emplace_back("FROST_LLVM_ROOT",
                                     std::filesystem::path(compiler).parent_path().parent_path().generic_string());
     auto produced =
-        frost::io::runToCompletion(frost::io::realProcessLauncher(), helper, payload, std::chrono::minutes(2));
+        frost::io::runToCompletion(frost::io::realProcessLauncher(), helper, request.dump(), std::chrono::minutes(2));
     ASSERT_TRUE(produced);
     ASSERT_EQ(produced->exitCode, 0) << produced->stdoutBytes << produced->stderrBytes;
     auto result = frost::lang::parseCppPreprocessorResult(produced->stdoutBytes);
@@ -65,6 +64,15 @@ TEST(SemanticPreprocessor, ExpandedSourceEqualsPinnedClangEAndRetainsActualEvent
     EXPECT_TRUE(frost::lang::validateCppIndexInputs(fs, result->receipt, {}));
     ASSERT_TRUE(fs.writeFileAtomic(header, "#define ADD(x,y) 0\n"));
     EXPECT_FALSE(frost::lang::validateCppIndexInputs(fs, result->receipt, {}));
+
+    request.set("commandIndex", 1);
+    const auto refused =
+        frost::io::runToCompletion(frost::io::realProcessLauncher(), helper, request.dump(), std::chrono::minutes(2));
+    ASSERT_TRUE(refused);
+    EXPECT_NE(refused->exitCode, 0);
+    const auto invalid = frost::lang::parseCppPreprocessorResult(refused->stdoutBytes);
+    ASSERT_FALSE(invalid);
+    EXPECT_EQ(invalid.error().message(), "Command ordinal outside captured database");
 }
 TEST(SemanticPreprocessor, MalformedAndUnavailableWireResultsRefuse) {
     EXPECT_FALSE(frost::lang::parseCppPreprocessorResult("{}"));

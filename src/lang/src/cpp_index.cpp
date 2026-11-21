@@ -21,6 +21,15 @@ bool number(const Json& row, std::string_view key) {
     const auto* value = row.find(key);
     return value && value->asUnsigned() && *value->asUnsigned() <= static_cast<std::uint64_t>(INT64_MAX);
 }
+char entryKind(io::FileType type) {
+    switch (type) {
+    case io::FileType::Regular: return 'f';
+    case io::FileType::Directory: return 'd';
+    case io::FileType::Symlink: return 'l';
+    case io::FileType::Other: return 'o';
+    }
+    return 'o';
+}
 } // namespace
 Result<CppIndexUnit> parseCppIndexUnit(std::string_view bytes) {
     if (bytes.size() > 64 * 1024 * 1024)
@@ -86,14 +95,26 @@ Result<CppIndexUnit> parseCppIndexUnit(std::string_view bytes) {
             *row.find("column")->asUnsigned() > input->second + 1)
             return fail(ErrorCode::InvalidArgument, "Occurrence has no captured source range");
     }
+    std::set<std::string> directories;
     for (const auto key : {"missingDependencies", "directoryDependencies"}) {
         const auto* values = parsed->find(key);
         if (!values || !values->isArray() || values->items().size() + paths.size() > 32768)
             return fail(ErrorCode::InvalidArgument, "Missing/oversized namespace dependencies");
-        for (const auto& value : values->items())
+        for (const auto& value : values->items()) {
             if (!value.asString() || !io::isAbsolutePath(*value.asString()) ||
                 !paths.insert(std::string(*value.asString())).second)
                 return fail(ErrorCode::InvalidArgument, "Invalid/overlapping namespace dependency");
+            if (std::string_view(key) == "directoryDependencies")
+                directories.emplace(*value.asString());
+        }
+    }
+    if (const auto* listings = parsed->find("directoryListings")) {
+        if (!listings->isArray() || listings->size() > 1024)
+            return fail(ErrorCode::InvalidArgument, "Invalid compiler directory listings");
+        for (const auto& listing : listings->items())
+            if (!text(listing, "path") || !text(listing, "sha256", 64) || listing.stringAt("sha256").size() != 64 ||
+                directories.erase(std::string(listing.stringAt("path"))) != 1)
+                return fail(ErrorCode::InvalidArgument, "Invalid or duplicate compiler directory listing");
     }
     CppIndexUnit result{
         std::string(parsed->stringAt("commandIdentity")), std::string(parsed->stringAt("configuration")),
@@ -187,6 +208,26 @@ Result<void> validateCppIndexInputs(io::IFileSystem& fs, const CppIndexUnit& uni
         if (!status || status->type != io::FileType::Directory)
             return fail(ErrorCode::Busy, "Index directory probe changed");
     }
+    if (const auto* listings = unit.data.find("directoryListings"))
+        for (const auto& listing : listings->items()) {
+            if (stop.stop_requested())
+                return fail(ErrorCode::Cancelled, "Index validation cancelled");
+            const auto path = listing.stringAt("path");
+            const auto entries = fs.listDirectory(path);
+            if (!entries || entries->size() > 65536)
+                return fail(ErrorCode::Busy, "Compiler directory listing changed");
+            // The receipt hashes sorted names with the entry kind and an unambiguous NUL delimiter.
+            std::string bytes;
+            for (const auto& entry : *entries) {
+                if (bytes.size() > 8U * 1024U * 1024U - 2 || entry.name.size() > 8U * 1024U * 1024U - 2 - bytes.size())
+                    return fail(ErrorCode::Busy, "Compiler directory listing exceeds its snapshot budget");
+                bytes += entryKind(entry.type);
+                bytes += entry.name;
+                bytes += '\0';
+            }
+            if (io::sha256Hex(bytes) != listing.stringAt("sha256"))
+                return fail(ErrorCode::Busy, "Compiler directory listing changed");
+        }
     return {};
 }
 } // namespace frost::lang

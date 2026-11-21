@@ -22,6 +22,8 @@ working directory and selected configuration; two `-D` variants of one source ne
 generation. Publication requires unchanged captured source/dependency inputs and current project
 generation. Cancellation and stale results do not publish partial generations. Queries expose the
 configuration and completeness rather than claiming whole-project coverage from a partial index.
+The semantic helper captures bounded on-disk directory listings used by Clang's toolchain discovery.
+Receipts recheck the names and entry kinds in those directories before publishing or reusing a result.
 
 Preprocessor views will retain actual Clang PP callbacks and preprocessed output with source and
 configuration locations. Module data will come from actual Clang dependency scanning output,

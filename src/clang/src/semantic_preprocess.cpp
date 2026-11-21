@@ -172,7 +172,7 @@ public:
 llvm::json::Object preprocess(const llvm::json::Object& request, llvm::StringRef resource) {
     const auto refuse = [](llvm::StringRef reason) {
         return llvm::json::Object{
-            {"kind", "frost-preprocessor"}, {"schema", 1}, {"status", "unavailable"}, {"error", reason}};
+            {"kind", "frost-preprocessor"}, {"schema", 1}, {"status", "unavailable"}, {"error", reason.str()}};
     };
     std::string error;
     auto command = semanticCommand(request, resource, error);

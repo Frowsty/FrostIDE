@@ -103,6 +103,22 @@ TEST_F(CppIndex, HeaderChangesInvalidateActualResultsWithoutDeletingSource) {
     EXPECT_EQ(rows->staleCommands, 1u);
     EXPECT_EQ(frost::io::realFileSystem().readFile(source).value_or("missing"), bytes);
 }
+TEST_F(CppIndex, CompilerDirectoryDiscoveryBecomesStaleWhenAnInstallationAppears) {
+    auto& fs = frost::io::realFileSystem();
+    const auto tools = scratch.join("toolchains");
+    ASSERT_TRUE(fs.createDirectories(scratch.join("toolchains/23")));
+    std::string recorded = "d23";
+    recorded += '\0';
+    auto input = unit('a');
+    input.data.set("directoryDependencies", Json::array({Json(tools)}));
+    input.data.set("directoryListings",
+                   Json::array({Json::object().set("path", tools).set("sha256", frost::io::sha256Hex(recorded))}));
+    ASSERT_TRUE(frost::lang::validateCppIndexInputs(fs, input, {}));
+    ASSERT_TRUE(fs.createDirectories(scratch.join("toolchains/24")));
+    const auto stale = frost::lang::validateCppIndexInputs(fs, input, {});
+    ASSERT_FALSE(stale);
+    EXPECT_EQ(stale.error().code(), frost::ErrorCode::Busy);
+}
 TEST_F(CppIndex, CancelledGenerationDoesNotReplacePriorCompleteUnit) {
     auto store = frost::lang::CppIndexStore::open(scratch.join("index.db"));
     ASSERT_TRUE(store);

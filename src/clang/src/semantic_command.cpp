@@ -2,8 +2,114 @@
 // CPP-8/13 preserves distinct full compile-command identities and captures actual frontend inputs.
 #include "semantic_command.hpp"
 
+#include "clang/Driver/Driver.h"
+
 namespace frost::clang_engine {
 namespace {
+using Iter = llvm::vfs::directory_iterator;
+using Entry = llvm::vfs::directory_entry;
+using Entries = std::vector<Entry>;
+
+class CapturedDirectoryIterator final : public llvm::vfs::detail::DirIterImpl {
+public:
+    explicit CapturedDirectoryIterator(std::shared_ptr<const Entries> entries) : m_entries(std::move(entries)) {
+        increment();
+    }
+    std::error_code increment() override {
+        CurrentEntry = m_next < m_entries->size() ? (*m_entries)[m_next++] : Entry{};
+        return {};
+    }
+
+private:
+    std::shared_ptr<const Entries> m_entries;
+    std::size_t m_next = 0;
+};
+
+char entryKind(llvm::sys::fs::file_type type) {
+    using Type = llvm::sys::fs::file_type;
+    switch (type) {
+    case Type::regular_file: return 'f';
+    case Type::directory_file: return 'd';
+    case Type::symlink_file: return 'l';
+    default: return 'o';
+    }
+}
+
+// Clang's driver uses real SDK installation directories to select its toolchain. Project source
+// overlays affect file reads, while they cannot add installations to the on-disk SDK discovery.
+class SemanticSnapshotFileSystem final : public semantic::SnapshotFileSystem {
+public:
+    SemanticSnapshotFileSystem(llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> files,
+                               llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> disk)
+        : SnapshotFileSystem(std::move(files), 32768, 512ULL * 1024 * 1024, 64ULL * 1024 * 1024),
+          m_disk(std::move(disk)) {}
+
+    Iter dir_begin(const llvm::Twine& path, std::error_code& code) override {
+        const auto key = keyFor(path);
+        if (const auto prior = m_listings.find(key); prior != m_listings.end()) {
+            code.clear();
+            return Iter(std::make_shared<CapturedDirectoryIterator>(prior->second.entries));
+        }
+        const auto observed = status(path);
+        if (!observed) {
+            code = observed.getError();
+            return {};
+        }
+        if (!observed->isDirectory()) {
+            code = std::make_error_code(std::errc::not_a_directory);
+            return {};
+        }
+        if (m_listings.size() >= 1024 || !semantic::addWithin(m_bytes, key.size(), semantic::kMainBytes)) {
+            error = "Compiler directory discovery exceeds its snapshot budget";
+            code = std::make_error_code(std::errc::file_too_large);
+            return {};
+        }
+        auto entries = std::make_shared<Entries>();
+        for (auto it = m_disk->dir_begin(path, code); !code && it != Iter{}; it.increment(code)) {
+            if (m_count >= 65536 || !semantic::addWithin(m_bytes, it->path().size(), semantic::kMainBytes)) {
+                error = "Compiler directory entries exceed their snapshot budget";
+                code = std::make_error_code(std::errc::file_too_large);
+                return {};
+            }
+            ++m_count;
+            entries->push_back(*it);
+        }
+        if (code) {
+            error = "Compiler directory listing could not be captured: " + key;
+            return {};
+        }
+        std::vector<std::pair<llvm::StringRef, char>> names;
+        for (const auto& entry : *entries)
+            names.emplace_back(llvm::sys::path::filename(entry.path()), entryKind(entry.type()));
+        std::sort(names.begin(), names.end());
+        std::string bytes;
+        for (const auto& [name, kind] : names) {
+            bytes += kind;
+            bytes.append(name.data(), name.size());
+            bytes += '\0';
+        }
+        m_listings.emplace(key, Listing{entries, semantic::sha256(bytes)});
+        return Iter(std::make_shared<CapturedDirectoryIterator>(std::move(entries)));
+    }
+
+    llvm::json::Array directoryListings() const {
+        llvm::json::Array result;
+        for (const auto& [path, listing] : m_listings)
+            result.push_back(llvm::json::Object{{"path", path}, {"sha256", listing.digest}});
+        return result;
+    }
+
+private:
+    struct Listing {
+        std::shared_ptr<const Entries> entries;
+        std::string digest;
+    };
+    llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> m_disk;
+    std::map<std::string, Listing> m_listings;
+    std::size_t m_count = 0;
+    std::size_t m_bytes = 0;
+};
+
 bool inside(llvm::StringRef path, llvm::StringRef root) {
     return path == root ||
            (path.starts_with(root) && path.size() > root.size() &&
@@ -88,10 +194,10 @@ std::optional<SemanticCommand> semanticCommand(const llvm::json::Object& request
     stream.flush();
     result.identity = sha256(identity);
     const auto driver = llvm::sys::path::filename(command.CommandLine.front());
-    const bool cl = driver == "cl.exe" || driver == "cl" || driver == "clang-cl.exe" || driver == "clang-cl";
+    const bool clDriver = driver == "cl.exe" || driver == "cl" || driver == "clang-cl.exe" || driver == "clang-cl";
     const bool c =
         driver == "clang" || driver == "clang.exe" || driver == "gcc" || driver == "gcc.exe" || driver == "cc";
-    if (!cl && !c && driver != "clang++" && driver != "clang++.exe" && driver != "g++" && driver != "g++.exe" &&
+    if (!clDriver && !c && driver != "clang++" && driver != "clang++.exe" && driver != "g++" && driver != "g++.exe" &&
         driver != "c++") {
         error = "Compiler wrapper is unsupported; supply its expanded compile command";
         return {};
@@ -99,10 +205,19 @@ std::optional<SemanticCommand> semanticCommand(const llvm::json::Object& request
     llvm::SmallString<256> pinned(resource);
     for (unsigned index = 0; index < 3; ++index)
         llvm::sys::path::remove_filename(pinned);
-    llvm::sys::path::append(pinned, "bin", cl ? "clang-cl" : c ? "clang" : "clang++");
+    llvm::sys::path::append(pinned, "bin", clDriver ? "clang-cl" : c ? "clang" : "clang++");
 #ifdef _WIN32
     pinned += ".exe";
 #endif
+    std::vector<const char*> driverArguments;
+    for (std::size_t index = 1; index < command.CommandLine.size(); ++index)
+        driverArguments.push_back(command.CommandLine[index].c_str());
+    const auto mode = clang::driver::getDriverMode(pinned, driverArguments);
+    if (!mode.empty() && mode != "cl" && mode != "gcc" && mode != "g++" && mode != "cpp") {
+        error = "Unsupported semantic compiler driver mode";
+        return {};
+    }
+    const bool clMode = clang::driver::IsClangCL(mode);
     std::vector<std::string> arguments{pinned.str().str()};
     for (std::size_t index = 1; index < command.CommandLine.size(); ++index) {
         const llvm::StringRef argument(command.CommandLine[index]);
@@ -112,24 +227,24 @@ std::optional<SemanticCommand> semanticCommand(const llvm::json::Object& request
             argument.starts_with("-fprofile") || argument.starts_with("-MJ") || argument == "-include-pch" ||
             argument.starts_with("--serialize-diagnostics") || argument.starts_with("-serialize-diagnostics") ||
             argument.starts_with("-fdiagnostics-serialization-file") || argument.starts_with("--output") ||
-            (cl && (argument.starts_with("/sourceDependencies") || argument.starts_with("/Fi"))) ||
-            (cl && (argument.starts_with("/Yu") || argument.starts_with("/Yc")))) {
+            (clMode && (argument.starts_with("/sourceDependencies") || argument.starts_with("/Fi"))) ||
+            (clMode && (argument.starts_with("/Yu") || argument.starts_with("/Yc")))) {
             error = "Response/plugin/module/opaque PCH command is not a textual semantic unit";
             return {};
         }
         arguments.push_back(argument.str());
     }
     arguments.push_back("-resource-dir=" + resource.str());
-    arguments.push_back(cl ? "/clang:-fno-implicit-modules" : "-fno-implicit-modules");
-    arguments.push_back(cl ? "/clang:-fno-implicit-module-maps" : "-fno-implicit-module-maps");
+    arguments.push_back(clMode ? "/clang:-fno-implicit-modules" : "-fno-implicit-modules");
+    arguments.push_back(clMode ? "/clang:-fno-implicit-module-maps" : "-fno-implicit-module-maps");
     command.CommandLine = std::move(arguments);
     // Producers receive a syntax-only command already stripped of ordinary output/dependency
     // actions; this contract is not left to an individual consumer's FrontendAction choice.
     command.CommandLine = clang::tooling::getClangStripOutputAdjuster()(command.CommandLine, command.Filename);
     command.CommandLine = clang::tooling::getClangStripDependencyFileAdjuster()(command.CommandLine, command.Filename);
     command.CommandLine = clang::tooling::getClangSyntaxOnlyAdjuster()(command.CommandLine, command.Filename);
-    llvm::IntrusiveRefCntPtr<llvm::vfs::OverlayFileSystem> physical(new llvm::vfs::OverlayFileSystem(
-        llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem>(llvm::vfs::createPhysicalFileSystem().release())));
+    llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> disk(llvm::vfs::createPhysicalFileSystem().release());
+    llvm::IntrusiveRefCntPtr<llvm::vfs::OverlayFileSystem> physical(new llvm::vfs::OverlayFileSystem(disk));
     llvm::IntrusiveRefCntPtr<llvm::vfs::InMemoryFileSystem> overlays(new llvm::vfs::InMemoryFileSystem);
     std::set<std::string> paths;
     std::size_t overlayBytes = 0;
@@ -154,7 +269,7 @@ std::optional<SemanticCommand> semanticCommand(const llvm::json::Object& request
             }
         }
     physical->pushOverlay(overlays);
-    result.files = new SnapshotFileSystem(physical, 32768, 512ULL * 1024 * 1024, 64ULL * 1024 * 1024);
+    result.files = new SemanticSnapshotFileSystem(physical, std::move(disk));
     return result;
 }
 llvm::json::Array semanticDependencies(const SemanticCommand& command) {
@@ -170,16 +285,18 @@ llvm::json::Object semanticUnitReceipt(const SemanticCommand& command, llvm::Str
         missing.push_back(path);
     for (const auto& path : command.files->directoryInputs())
         directories.push_back(path);
-    return llvm::json::Object{{"kind", kind},
-                              {"schema", 1},
-                              {"status", "ready"},
-                              {"configuration", command.configuration},
-                              {"commandIdentity", command.identity},
-                              {"source", command.command.Filename},
-                              {"compilationDatabaseSha256", command.databaseSha256},
-                              {"commandIndex", command.commandIndex},
-                              {"dependencies", semanticDependencies(command)},
-                              {"missingDependencies", std::move(missing)},
-                              {"directoryDependencies", std::move(directories)}};
+    return llvm::json::Object{
+        {"kind", kind},
+        {"schema", 1},
+        {"status", "ready"},
+        {"configuration", command.configuration},
+        {"commandIdentity", command.identity},
+        {"source", command.command.Filename},
+        {"compilationDatabaseSha256", command.databaseSha256},
+        {"commandIndex", command.commandIndex},
+        {"dependencies", semanticDependencies(command)},
+        {"missingDependencies", std::move(missing)},
+        {"directoryDependencies", std::move(directories)},
+        {"directoryListings", static_cast<const SemanticSnapshotFileSystem&>(*command.files).directoryListings()}};
 }
 } // namespace frost::clang_engine

@@ -142,7 +142,7 @@ private:
  * snapshot set, never adopt newly appearing disk bytes. The VFS API has no write operation.
  * File size is admitted before reading; the explicit size bounds the backing buffer request.
  */
-class SnapshotFileSystem final : public llvm::vfs::ProxyFileSystem {
+class SnapshotFileSystem : public llvm::vfs::ProxyFileSystem {
 public:
     explicit SnapshotFileSystem(llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> base, std::size_t files = kFiles,
                                 std::size_t bytes = kDependencyBytes, std::size_t fileBytes = kDependencyBytes)
@@ -299,6 +299,8 @@ private:
     std::size_t m_namespaceBytes = 0;
     std::map<std::string, llvm::ErrorOr<llvm::vfs::Status>> m_status;
     std::map<std::string, std::pair<std::error_code, std::string>> m_realPaths;
+
+protected:
     std::string keyFor(const llvm::Twine& path) {
         // Keep lookup spelling: collapsing symlink/.. could merge distinct native observations.
         llvm::SmallString<256> value(path.str());
