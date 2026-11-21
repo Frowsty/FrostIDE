@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Explicit later local EventPipe oracle: never executed during implementation/source review.
 #include "frost/debug/coreclr_dap.hpp"
+#include "frost/io/path.hpp"
 #include "frost/run/managed_diagnostics.hpp"
 
 #include "support/scratch_dir.hpp"
@@ -33,9 +34,20 @@ TEST(ManagedDiagnosticsReal, AttachedToolsProduceIndependentlyReadableArtifactsA
     launch.killOnClose = true;
     auto target = build::RunSession::start(io::realProcessLauncher(), launch, {});
     ASSERT_TRUE(target);
-    auto identity =
-        debug::coreClrProcessAdmission(static_cast<std::uint32_t>((*target)->processId()), launch.executable);
-    ASSERT_TRUE(identity);
+    const auto pid = static_cast<std::uint32_t>((*target)->processId());
+    auto identity = debug::coreClrProcessAdmission(pid, launch.executable);
+    ASSERT_TRUE(identity) << identity.error().describe();
+    const auto wrongImage = debug::coreClrProcessAdmission(pid, FROST_DIAGNOSTIC_TRACE);
+    ASSERT_FALSE(wrongImage);
+    EXPECT_EQ(wrongImage.error().code(), ErrorCode::PermissionDenied);
+#ifdef _WIN32
+    const auto parent = io::parentPath(launch.executable);
+    const auto traversal = std::string(parent) + "/../" + std::string(io::fileName(parent)) + "/" +
+                           std::string(io::fileName(launch.executable));
+    const auto nonliteralImage = debug::coreClrProcessAdmission(pid, traversal);
+    ASSERT_FALSE(nonliteralImage);
+    EXPECT_EQ(nonliteralImage.error().code(), ErrorCode::PermissionDenied);
+#endif
     const std::pair<ManagedDiagnosticKind, const char*> tools[] = {
         {ManagedDiagnosticKind::Trace, FROST_DIAGNOSTIC_TRACE},
         {ManagedDiagnosticKind::Counters, FROST_DIAGNOSTIC_COUNTERS},
@@ -58,7 +70,7 @@ TEST(ManagedDiagnosticsReal, AttachedToolsProduceIndependentlyReadableArtifactsA
         request.expectedVersion = token;
         request.workingDirectory = scratch.path();
         request.outputDirectory = scratch.join("capture-" + std::to_string(sequence++));
-        request.processId = static_cast<std::uint32_t>((*target)->processId());
+        request.processId = pid;
         request.durationSeconds = kind == ManagedDiagnosticKind::GcDump ? 60 : 3;
         request.allowFullGc = true;
         request.admit = *identity;
@@ -87,6 +99,7 @@ TEST(ManagedDiagnosticsReal, AttachedToolsProduceIndependentlyReadableArtifactsA
         EXPECT_FALSE((*target)->finished());
     }
     (*target)->stop();
+    ASSERT_TRUE((*target)->waitFor(std::chrono::seconds(5)));
     EXPECT_FALSE((*identity)());
 }
 } // namespace frost::run

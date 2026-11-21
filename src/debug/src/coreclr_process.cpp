@@ -7,6 +7,8 @@
 #ifdef _WIN32
 #include "frost/io/utf.hpp"
 
+#include <algorithm>
+
 #include <windows.h>
 #else
 #include <sys/stat.h>
@@ -72,6 +74,8 @@ Result<std::function<Result<void>()>> coreClrProcessAdmission(std::uint32_t pid,
     auto expected = io::toWide(executable);
     if (!expected)
         return std::unexpected(std::move(expected.error()));
+    // Match QueryFullProcessImageNameW's separators without resolving any path components.
+    std::ranges::replace(*expected, L'/', L'\\');
     auto process = std::shared_ptr<void>(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid),
                                          [](void* handle) {
                                              if (handle)
@@ -84,10 +88,12 @@ Result<std::function<Result<void>()>> coreClrProcessAdmission(std::uint32_t pid,
             return Result<void>(fail(ErrorCode::NotFound, "CoreCLR process exited"));
         std::wstring path(32768, L'\0');
         DWORD length = static_cast<DWORD>(path.size());
-        if (!QueryFullProcessImageNameW(process.get(), 0, path.data(), &length) ||
-            CompareStringOrdinal(path.data(), static_cast<int>(length), expected.data(),
+        if (!QueryFullProcessImageNameW(process.get(), 0, path.data(), &length))
+            return Result<void>(fail(ErrorCode::PermissionDenied, "Cannot read the running CoreCLR process image"));
+        if (CompareStringOrdinal(path.data(), static_cast<int>(length), expected.data(),
                                  static_cast<int>(expected.size()), TRUE) != CSTR_EQUAL)
-            return Result<void>(fail(ErrorCode::PermissionDenied, "CoreCLR process image changed"));
+            return Result<void>(fail(ErrorCode::PermissionDenied,
+                                     "Selected executable does not match the running CoreCLR process image"));
         return Result<void>{};
     };
 #else
