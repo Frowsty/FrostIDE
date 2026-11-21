@@ -122,10 +122,16 @@ TEST(WorkbenchClangd, CppEditorLinksFoldsInlayHintsAndTheAstViewComeFromClangd) 
     writeProject(dir);
     const std::string main = dir.join("main.cpp");
     WorkbenchRig rig(dir, clangdOptions());
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
     rig.show();
     ASSERT_TRUE(rig.workbench->openPath(dir.path()).has_value()); // The folder is the project.
-    ASSERT_NE(rig.workbench->clangd(), nullptr);
     ASSERT_TRUE(rig.workbench->openPath(main).has_value());
+    ASSERT_TRUE(waitFor(
+        [&] {
+            const auto* clangd = rig.workbench->clangd();
+            return clangd && clangd->state() == fl::ClangdState::Running;
+        },
+        kPatience));
     frost::app::DocumentEditorView* view = rig.view();
     ASSERT_NE(view, nullptr);
     frost::ui::EditorView& editor = view->editor();
@@ -222,10 +228,16 @@ TEST(WorkbenchClangd, CppEditorFormatOnSaveIsOffByDefaultAndWhenOnEqualsTheClang
     writeProject(dir);
     const std::string main = dir.join("main.cpp");
     WorkbenchRig rig(dir, clangdOptions());
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
     rig.show();
     ASSERT_TRUE(rig.workbench->openPath(dir.path()).has_value());
-    ASSERT_NE(rig.workbench->clangd(), nullptr);
     ASSERT_TRUE(rig.workbench->openPath(main).has_value());
+    ASSERT_TRUE(waitFor(
+        [&] {
+            const auto* clangd = rig.workbench->clangd();
+            return clangd && clangd->state() == fl::ClangdState::Running;
+        },
+        kPatience));
     frost::app::DocumentEditorView* view = rig.view();
     ASSERT_NE(view, nullptr);
     frost::ui::EditorView& editor = view->editor();
