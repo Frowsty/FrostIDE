@@ -46,9 +46,13 @@ protected:
         target.trustRoots = {debug::test::workPath("EngineProject")};
         if (mode == debug::DebugTargetMode::Launch)
             ASSERT_TRUE(controller->startTarget(target));
-        else
+        else {
+            peer.on("attach", [](const rpc::Json&) {
+                return debug::FakeDebugAdapter::Reply{.events = {{"initialized", rpc::Json()}}};
+            });
             ASSERT_TRUE(
                 controller->attachTarget(target, debug::test::fakeFactory(peer), rpc::Json::object().set("pid", 4321)));
+        }
         ASSERT_TRUE(events([&] { return controller->state() == debug::DebugState::Running; }));
         peer.sendEvent("process", rpc::Json::object().set("systemProcessId", 4321));
         ASSERT_TRUE(events([&] { return controller->session()->processId() == 4321; }));

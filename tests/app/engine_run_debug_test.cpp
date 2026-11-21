@@ -130,11 +130,13 @@ TEST(EngineRunDebug, CancelStopsOnlyCapturedOwnedRunAndNeverAnUnrelatedRun) {
     launcher.expect({.neverExits = true});
     launcher.expect({.neverExits = true});
     auto manager = run::RunManager::create(launcher);
-    auto unrelated = configuration();
+    run::RunConfiguration unrelated;
     unrelated.id = "unrelated";
+    unrelated.name = "Unrelated native run";
     unrelated.type = run::RunType::Native;
+    unrelated.program = path("Unrelated.exe");
     auto other = manager->start(unrelated);
-    ASSERT_TRUE(other);
+    ASSERT_TRUE(other) << other.error().describe();
     ui::RunController runs(nullptr, runHooks());
     runs.setRunManager(manager.get());
     EngineRunDebugHooks hooks;

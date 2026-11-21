@@ -39,7 +39,8 @@ public:
     Result<void> removeFile(std::string_view p) override { return io::realFileSystem().removeFile(p); }
     Result<void> removeDirectory(std::string_view p) override { return io::realFileSystem().removeDirectory(p); }
     Result<bool> exists(std::string_view p) override { return io::realFileSystem().exists(p); }
-    Result<std::string> canonicalPath(std::string_view p) override {
+    Result<std::string> canonicalPath(std::string_view p) override { return io::realFileSystem().canonicalPath(p); }
+    Result<std::string> physicalPath(std::string_view p) override {
         if (enabled.load() && io::normalizePath(p).value_or("") == tool) {
             if (std::this_thread::get_id() == gui)
                 guiTouched = true;
@@ -50,7 +51,7 @@ public:
                 returned = true;
             }
         }
-        return io::realFileSystem().canonicalPath(p);
+        return io::realFileSystem().physicalPath(p);
     }
 };
 class UnavailableCli final : public io::IProcessLauncher {

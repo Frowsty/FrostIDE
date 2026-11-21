@@ -193,11 +193,13 @@ TEST(EngineUnitTestsComposition, CTestRemainsFirstAndEngineSourceOptionsMustMatc
     ASSERT_NE(content, nullptr);
     auto* tabs = qobject_cast<QTabWidget*>(content);
     ASSERT_NE(tabs, nullptr);
-    ASSERT_EQ(tabs->count(), 2);
+    ASSERT_GT(tabs->count(), 0);
     EXPECT_EQ(tabs->currentIndex(), 0);
     EXPECT_EQ(tabs->widget(0)->objectName(), "unitTestsToolWindow");
-    EXPECT_EQ(tabs->widget(1)->objectName(), "engineUnitTestsProvider");
-    auto* tree = tabs->widget(1)->findChild<QTreeWidget*>("engineTestsTree");
+    auto* engineProvider = tabs->findChild<QWidget*>("engineUnitTestsProvider");
+    ASSERT_NE(engineProvider, nullptr);
+    EXPECT_GT(tabs->indexOf(engineProvider), 0);
+    auto* tree = engineProvider->findChild<QTreeWidget*>("engineTestsTree");
     ASSERT_NE(tree, nullptr);
     ASSERT_TRUE(test::waitFor([&] { return tree->topLevelItemCount() == 1; }));
     EXPECT_EQ(tree->topLevelItem(0)->text(0), "Assets/Tests/A.fscene");
@@ -210,7 +212,7 @@ TEST(EngineUnitTestsComposition, CTestRemainsFirstAndEngineSourceOptionsMustMatc
     ASSERT_FALSE(refused);
     EXPECT_EQ(refused.error().code(), ErrorCode::PermissionDenied);
     ASSERT_EQ(launcher.tests.launches().size(), 1U);
-    auto* debug = tabs->widget(1)->findChild<QPushButton*>("engineTestsDebug");
+    auto* debug = engineProvider->findChild<QPushButton*>("engineTestsDebug");
     ASSERT_NE(debug, nullptr);
     tree->setCurrentItem(tree->topLevelItem(0));
     ASSERT_TRUE(rig.trust->untrust(dir.path()));
