@@ -31,6 +31,10 @@
 namespace frost::app {
 namespace {
 QString qs(std::string_view value) { return QString::fromUtf8(value.data(), static_cast<qsizetype>(value.size())); }
+struct EditInput {
+    std::string physicalPath;
+    std::optional<std::string> bufferDiskBytes;
+};
 struct Capture {
     std::string root, database, helper;
     std::uint64_t generation = 0, trustRevision = 0;
@@ -40,6 +44,7 @@ struct Capture {
     document::RefactoringPlan plan;
     lang::WorkspaceEdit targets;
     std::map<std::string, std::string> open;
+    std::map<std::string, EditInput> editInputs;
     std::vector<std::pair<std::string, std::string>> overlays;
     std::vector<std::string> plugins;
     std::shared_ptr<lang::ClangdService> server;
@@ -207,10 +212,13 @@ void Workbench::prepareCppInspectionScopeFixes(lang::InspectionScope scope, lang
                         settings->get(settings::key::toolsClangTidyPlugins) != capture->plugins)
                         return fail(ErrorCode::Busy, "Project, inspection configuration, trust or provider changed");
                     std::map<std::string, std::string> open;
+                    std::set<std::string> dirty;
                     std::set<std::string> physical;
                     for (const auto& document : self->m_documents->documents())
                         if (!document->path().empty()) {
                             open.emplace(lang::documentKey(document->path()), document->document().text().text());
+                            if (document->dirty())
+                                dirty.insert(lang::documentKey(document->path()));
                             auto identity = self->m_services.fs.physicalPath(document->path());
                             if (identity)
                                 physical.insert(lang::documentKey(*identity));
@@ -219,6 +227,22 @@ void Workbench::prepareCppInspectionScopeFixes(lang::InspectionScope scope, lang
                         }
                     if (open != capture->open)
                         return fail(ErrorCode::Busy, "Open source images/layout changed since inspection start");
+                    for (const auto& [path, input] : capture->editInputs) {
+                        auto target = self->m_services.fs.physicalPath(path);
+                        if (!target || *target != input.physicalPath)
+                            return fail(ErrorCode::Busy, "Inspection edit target identity changed: " + path);
+                        if (input.bufferDiskBytes) {
+                            // Automatic persistence adds clean buffers to the native transaction.
+                            // Dirty buffers are memory-only and retain their no-follow disk check.
+                            if (dirty.contains(lang::documentKey(path))) {
+                                auto disk = self->m_services.fs.readFileSnapshot(path, 64U * 1024U * 1024U);
+                                if (!disk || *disk != *input.bufferDiskBytes)
+                                    return fail(ErrorCode::Busy, "Inspection buffer disk image changed: " + path);
+                            }
+                        } else if (physical.contains(lang::documentKey(*target))) {
+                            return fail(ErrorCode::Busy, "A disk edit target now aliases an editor: " + path);
+                        }
+                    }
                     for (const auto& image : capture->inputs.images)
                         if (!image.buffer && physical.contains(lang::documentKey(image.physicalPath)))
                             return fail(ErrorCode::Busy, "A closed inspection input now aliases an open document");
@@ -230,6 +254,21 @@ void Workbench::prepareCppInspectionScopeFixes(lang::InspectionScope scope, lang
                     done(std::unexpected(current.error()));
                     return;
                 }
+                // The transaction verifies these exact Before images under its native leases.
+                // An independent snapshot cannot reopen a leased edit target on Windows.
+                std::set<std::string_view> diskEdits, bufferEdits;
+                for (const auto& edit : capture->plan.disk)
+                    diskEdits.insert(edit.path);
+                for (const auto& edit : capture->plan.buffers)
+                    bufferEdits.insert(edit.path);
+                std::erase_if(capture->inputs.images, [&](const auto& image) {
+                    if (image.buffer ? !bufferEdits.contains(image.path) : !diskEdits.contains(image.path))
+                        return false;
+                    capture->editInputs.emplace(
+                        image.path,
+                        EditInput{image.physicalPath, image.buffer ? std::optional{image.diskBytes} : std::nullopt});
+                    return true;
+                });
                 auto plan = std::move(capture->plan);
                 plan.revalidateContext = std::move(admission);
                 done(std::move(plan));

@@ -333,10 +333,13 @@ TEST(WorkbenchInspection, ExportedScopeFixPreviewRefusesStaleHeaderThenAppliesAn
     auto tidy = fl::findClangTidy(fs, fio::realProcessLauncher());
     ASSERT_TRUE(tidy) << tidy.error().describe();
     WorkDir dir("ref10-exported-module-fix"), recovery("ref10-private-recovery");
-    const std::string before = "#include \"header.hpp\"\nint* sourcePointer = 0;\n";
+    const std::string includes = "#include \"header.hpp\"\n#include \"context.hpp\"\n";
+    const std::string before = includes + "int* sourcePointer = 0;\n";
     const std::string headerBefore = "inline int* headerPointer = 0;\n";
+    const std::string contextBefore = "inline constexpr int version = 1;\n";
     dir.write("src/input.cpp", before);
     dir.write("src/header.hpp", headerBefore);
+    dir.write("src/context.hpp", contextBefore);
     dir.write(".clang-tidy", "Checks: '-*,modernize-use-nullptr'\nWarningsAsErrors: ''\n");
     const auto source = dir.join("src/input.cpp"), header = dir.join("src/header.hpp");
     ASSERT_TRUE(fl::writeCompileCommands(
@@ -381,11 +384,17 @@ TEST(WorkbenchInspection, ExportedScopeFixPreviewRefusesStaleHeaderThenAppliesAn
     auto second = prepare();
     ASSERT_TRUE(waitFor([&] { return second->has_value(); }, 120s));
     ASSERT_TRUE(second->value()) << second->value().error().describe();
+    dir.write("src/context.hpp", "// external dependency change\n" + contextBefore);
+    const auto changedDependency = rig.workbench->applyRefactoring(*second->value());
+    ASSERT_FALSE(changedDependency);
+    EXPECT_EQ(changedDependency.error().code(), frost::ErrorCode::Busy);
+    EXPECT_EQ(rig.view()->editor().document().text().text(), before);
+    EXPECT_EQ(dir.read("src/header.hpp"), "// external change\n" + headerBefore);
+    dir.write("src/context.hpp", contextBefore);
     auto applied = rig.workbench->applyRefactoring(*second->value());
     ASSERT_TRUE(applied) << applied.error().describe();
     EXPECT_EQ(applied->status, frost::document::RefactoringStatus::Applied);
-    EXPECT_EQ(rig.view()->editor().document().text().text(),
-              "#include \"header.hpp\"\nint* sourcePointer = nullptr;\n");
+    EXPECT_EQ(rig.view()->editor().document().text().text(), includes + "int* sourcePointer = nullptr;\n");
     EXPECT_EQ(dir.read("src/header.hpp"), "// external change\ninline int* headerPointer = nullptr;\n");
     auto undone = rig.workbench->undoRefactoring();
     ASSERT_TRUE(undone) << undone.error().describe();
