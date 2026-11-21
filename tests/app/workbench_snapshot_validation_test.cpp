@@ -172,7 +172,8 @@ TEST(WorkbenchSnapshotValidation, SupersededWorkerResponseNeverPublishes) {
     WorkbenchRig rig(dir, {.launcher = &launcher});
     const auto path = dir.join("CMakePresets.json");
     auto* model = rig.workbench->problems()->model();
-    QObject::connect(model, &QAbstractItemModel::modelReset, model,
+    QObject watchLifetime;
+    QObject::connect(model, &QAbstractItemModel::modelReset, &watchLifetime,
                      [&] { stalePublished |= problem(rig, path, "schema").has_value(); });
     ASSERT_TRUE(rig.workbench->openPath(path));
     ASSERT_TRUE(waitFor([&] { return launcher.launches.load() == 1; }));
@@ -198,7 +199,8 @@ TEST(WorkbenchSnapshotValidation, ClosedDocumentResponseCannotReachReopenedTab) 
     WorkbenchRig rig(dir, {.launcher = &launcher});
     const auto path = dir.join("CMakePresets.json");
     auto* model = rig.workbench->problems()->model();
-    QObject::connect(model, &QAbstractItemModel::modelReset, model,
+    QObject watchLifetime;
+    QObject::connect(model, &QAbstractItemModel::modelReset, &watchLifetime,
                      [&] { stalePublished |= problem(rig, path, "schema").has_value(); });
     ASSERT_TRUE(rig.workbench->openPath(path));
     ASSERT_TRUE(waitFor([&] { return launcher.launches.load() == 1; }));
