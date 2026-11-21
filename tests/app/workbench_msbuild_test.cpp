@@ -38,6 +38,7 @@
 #include <QPushButton>
 #include <QScopeGuard>
 #include <QTimer>
+#include <QToolButton>
 #include <QTreeView>
 
 #include <algorithm>
@@ -86,14 +87,26 @@ TEST(WorkbenchMsBuild, BuildErrorsReachProblemsAndJumpToTheLine) {
     ASSERT_TRUE(rig.trust->trust(dir.path()).has_value()); // No trust dialog in a test.
     ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")).has_value());
 
+    QToolButton* debug = rig.window->mainToolbar().button(frost::ui::MainToolbar::kDebug);
+    ASSERT_NE(debug, nullptr);
+    std::optional<bool> debugEnabledAtIdle;
+    const auto observeReadiness = QObject::connect(&rig.workbench->build(), &frost::ui::BuildController::stateChanged,
+                                                   rig.window.get(), [&](frost::build::BuildState state) {
+                                                       if (state == frost::build::BuildState::Idle)
+                                                           debugEnabledAtIdle = debug->isEnabled();
+                                                   });
+    const auto disconnectReadiness = qScopeGuard([&] { QObject::disconnect(observeReadiness); });
+
     rig.window->menus().refresh(); // As opening the Build menu does.
     QAction* rebuild = rig.window->menus().action(frost::ui::build_actions::kRebuildSolution);
     ASSERT_NE(rebuild, nullptr);
     ASSERT_TRUE(rebuild->isEnabled());
     rebuild->trigger();
     ASSERT_TRUE(waitFor([&] { return rig.workbench->build().isBuilding(); }));
+    EXPECT_FALSE(debug->isEnabled());
     EXPECT_TRUE(rig.window->toolWindows().isVisible(frost::app::kBuildToolWindow));
     ASSERT_TRUE(waitFor([&] { return !rig.workbench->build().isBuilding(); }, std::chrono::seconds(180)));
+    EXPECT_EQ(debugEnabledAtIdle, true);
     ASSERT_TRUE(rig.workbench->build().lastOutcome().has_value());
     EXPECT_EQ(rig.workbench->build().lastOutcome()->counts.errors, 1U);
     EXPECT_EQ(rig.workbench->build().lastOutcome()->counts.warnings, 1U);

@@ -548,6 +548,12 @@ void Workbench::createBuildService() {
         const DocumentEditorView* view = currentView();
         return view != nullptr ? std::string(view->path()) : std::string();
     });
+    // Launch actions are gated by the build service; refresh their cached controls
+    // whenever the controller reports a transition, even without an editor input event.
+    connect(m_build.get(), &ui::BuildController::stateChanged, this, [this] {
+        if (m_window)
+            m_window->refreshActions();
+    });
     // A new configuration builds other files with other flags: clangd follows (ADR 0041).
     connect(m_build.get(), &ui::BuildController::activeConfigurationChanged, this, [this](int) {
         if (m_solution && !m_closingSolution && m_build->backend() == m_buildBackend.get()) {
