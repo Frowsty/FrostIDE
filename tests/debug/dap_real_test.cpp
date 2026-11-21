@@ -1476,8 +1476,11 @@ TEST_F(DapReal, PauseThenContinueThenPauseAgain) {
     launchSpinning();
     ASSERT_TRUE(m_session->pause());
     ASSERT_TRUE(waitStop(1));
+    ASSERT_TRUE(eval("g_report_resume = 1")) << report();
     ASSERT_TRUE(m_session->continueRun());
-    ASSERT_TRUE(test::waitUntil([&] { return m_session->state() == DebugState::Running; }, kWait));
+    // Running is also set optimistically by continueRun. Require the inferior to
+    // execute between the two pauses, including on Windows after its break-in thread.
+    ASSERT_TRUE(waitOutput("resumed=1")) << report();
     ASSERT_TRUE(m_session->pause());
     const auto stop = waitStop(2);
     ASSERT_TRUE(stop);

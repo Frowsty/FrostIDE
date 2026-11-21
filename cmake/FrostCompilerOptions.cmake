@@ -10,10 +10,11 @@
 # The sanitizer flags of FROST_SANITIZE (FROST_SANITIZE_COMPILE_OPTIONS and
 # FROST_SANITIZE_LINK_OPTIONS, set by the root CMakeLists.txt) are applied here too, per
 # target, so that every FrostIDE target agrees on the runtime. NO_SANITIZE leaves them out;
-# only frost.exe's Windows launcher uses it (src/app/CMakeLists.txt): it is a dozen loader
+# frost.exe's Windows launcher uses it (src/app/CMakeLists.txt): it is a dozen loader
 # calls that must run before any DLL beside it loads, and an instrumented launcher imports
 # the ASan runtime, whose RT_MANIFEST 2 brings back the loader's kill before main on long
-# plain starts (ADR 0012).
+# plain starts (ADR 0012). Linux address-sanitized builds also use NO_SANITIZE
+# for external toy debuggees that must exit normally under a debugger.
 
 include_guard(GLOBAL)
 

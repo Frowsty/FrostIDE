@@ -141,10 +141,17 @@ endif()
 
 # The debuggee: a plain C++ program without frost code, built without optimisation and with full
 # debug information so lldb sees its lines and locals.
+# These external Linux toy inferiors must exit normally while the debugger still owns
+# them. LeakSanitizer's exit-time scanner rejects a traced process. The debugger and
+# test harness retain their full sanitizer instrumentation.
+set(_debuggee_compile_options)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND "address" IN_LIST FROST_SANITIZE)
+    set(_debuggee_compile_options NO_SANITIZE)
+endif()
 add_executable(debug_test_debuggee fixtures/debuggee.cpp)
 # This fixture checks source-line binding, so its debug paths must match this worktree.
 set_property(TARGET debug_test_debuggee PROPERTY CXX_COMPILER_LAUNCHER "")
-frost_apply_compile_options(debug_test_debuggee TEST)
+frost_apply_compile_options(debug_test_debuggee TEST ${_debuggee_compile_options})
 frost_copy_runtime_dlls(debug_test_debuggee)
 if(MSVC)
     target_compile_options(debug_test_debuggee PRIVATE /Od /Ob0 /Z7)
@@ -157,7 +164,8 @@ endif()
 # optimisation, a full PDB on Windows (clang-cl), DWARF on Linux (clang).
 add_executable(debug_test_scenarios fixtures/dap_scenarios.cpp)
 set_property(TARGET debug_test_scenarios PROPERTY CXX_COMPILER_LAUNCHER "")
-frost_apply_compile_options(debug_test_scenarios TEST)
+frost_apply_compile_options(debug_test_scenarios TEST ${_debuggee_compile_options})
+unset(_debuggee_compile_options)
 frost_copy_runtime_dlls(debug_test_scenarios)
 if(MSVC)
     target_compile_options(debug_test_scenarios PRIVATE /Od /Ob0 /Z7)

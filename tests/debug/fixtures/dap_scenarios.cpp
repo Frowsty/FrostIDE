@@ -62,6 +62,7 @@ struct Outer {
 
 // volatile int rather than std::atomic: lldb assigns it through evaluate ("g_release = 1").
 volatile int g_release = 0;
+volatile int g_report_resume = 0;
 volatile int g_counter = 0;
 
 FROST_NOINLINE int accumulate(int total, int i) {
@@ -101,6 +102,11 @@ FROST_NOINLINE void worker_body(int index) {
 FROST_NOINLINE int spin_until_released() {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(120);
     while (g_release == 0) {
+        if (g_report_resume != 0) {
+            g_report_resume = 0;
+            std::printf("resumed=1\n");
+            std::fflush(stdout);
+        }
         if (std::chrono::steady_clock::now() > deadline) {
             return 3;
         }
