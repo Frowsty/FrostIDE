@@ -11,6 +11,8 @@
 
 #include <algorithm>
 #include <format>
+#include <set>
+#include <tuple>
 
 namespace frost::project {
 
@@ -490,6 +492,9 @@ Result<std::optional<CMakeProject>> readCMakeFileApiReply(io::IFileSystem& fs, s
         if (auto json = reader.object(files.cmakeFiles)) {
             if (const JsonNode* inputs = json->find("inputs"); inputs != nullptr && inputs->isArray()) {
                 project.inputsAvailable = true;
+                // CMake can report the same generated compiler input more than once.
+                // Keep conflicting flags for consumers to reject rather than hiding them.
+                std::set<std::tuple<std::string, bool, bool, bool>> seen;
                 for (const JsonNode& input : inputs->items) {
                     const JsonNode* path = input.find("path");
                     if (!path || !path->isString() || path->text.empty())
@@ -498,11 +503,12 @@ Result<std::optional<CMakeProject>> readCMakeFileApiReply(io::IFileSystem& fs, s
                         if (const JsonNode* flag = input.find(key); flag && !flag->isBool())
                             project.inputsAvailable = false;
                     }
-                    project.inputs.push_back(
-                        CMakeInputFile{.path = resolvePath(project.sourceDirectory, input.stringAt("path")),
-                                       .generated = input.boolAt("isGenerated"),
-                                       .external = input.boolAt("isExternal"),
-                                       .cmake = input.boolAt("isCMake")});
+                    CMakeInputFile file{.path = resolvePath(project.sourceDirectory, input.stringAt("path")),
+                                        .generated = input.boolAt("isGenerated"),
+                                        .external = input.boolAt("isExternal"),
+                                        .cmake = input.boolAt("isCMake")};
+                    if (seen.emplace(file.path, file.generated, file.external, file.cmake).second)
+                        project.inputs.push_back(std::move(file));
                 }
             }
         }
