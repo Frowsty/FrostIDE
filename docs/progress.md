@@ -8513,3 +8513,11 @@ At the owner's request the Windows upload set includes a signed Stable manifest 
 All 1,163 archive files matched the public stage. An extracted copy passed launch and self-test, clangd, LLDB, Lua, validator and Workbench LuaLS checks. Solution Explorer in both .sln and .slnx showed nested, imported and wildcard header items in exact agreement with the MSBuild evaluation of the synthetic projects. The public package omits the local managed runtime payloads and carries refreshed source archives and notices. The separate private package passed a real local update, rollback, relaunch and uninstall.
 
 The full cross-platform suites and manual round gates remain open. The earlier diagnostic revision `125dc1cb` recorded 71 Windows and 45 Ubuntu Debug failures. Focused fixes on the verification branch require a complete rerun on the integrated revision. The Unreal acceptance gate still needs an available licensed installation and test project.
+
+### FrostIDE 1.0 candidate verification (2026-11-21)
+
+The release title is **FrostIDE 1.0**. The first stable candidate uses calendar version `2026.11.21.1`, build 26, so build 25 can discover it through the Stable updater. The build 25 updater accepted that version against the saved Stable floor in an isolated eligibility test with an ephemeral signing key. Production signing, installation of the final offer, the release tag, and publication are pending.
+
+Focused work on the candidate fixed the Tree-sitter external scanner prototype, a lifetime bug in snapshot-validation test callbacks, native debugger fixture timing, and unnecessary synchronous layout writes during CMake project open. The scanner changes passed 59 Linux ASan/UBSan syntax tests, the snapshot suite passed all four tests, and the debugger suite passed 105 Linux tests. The pinned project-opening workload measured a longest UI stall of 81 ms after the layout change, against the 250 ms limit.
+
+The previous full baseline at `125dc1cb` did not pass. Release acceptance still needs the combined Windows and Linux full suites, sanitizers, valid performance measurements, the R16 journeys, owner UAT and sign-off. The full performance entry point and measurements are incomplete. PLAN.md section 4 requires 14 qualifying green days.
