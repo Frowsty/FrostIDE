@@ -61,19 +61,26 @@ constexpr std::string_view kSource = "#include \"widgets.h\"\n"
 // A style unlike clang-format's default, so the result must have come from the file's style.
 constexpr std::string_view kStyle = "BasedOnStyle: LLVM\nIndentWidth: 3\nBreakBeforeBraces: Allman\n";
 
-std::string clangdPath() {
-    auto found = fl::findClangd(frost::io::realFileSystem(), fl::defaultClangdSearch());
+std::string clangFormatCliPath() {
+    // frost-clang can be staged alone beside the test executable. The independent
+    // formatting oracle comes from the LLVM tool directory, with the bundled
+    // provider still selected normally by the Workbench.
+    auto search = fl::defaultClangdSearch();
+    search.bundledFrostPath.clear();
+    search.pathVariable.clear();
+    auto found = fl::findClangd(frost::io::realFileSystem(), search);
     EXPECT_TRUE(found.has_value()) << found.error().describe();
-    return found ? found->path : std::string();
+    if (!found)
+        return {};
+    return frost::io::joinPath(frost::io::parentPath(found->path), kWindows ? "clang-format.exe" : "clang-format")
+        .value_or("");
 }
 
-// The pinned clang-format CLI (beside clangd) on `text`, written to `file` first: its output.
+// The pinned clang-format CLI on `text`, written to `file` first: its output.
 std::string clangFormatCli(const WorkDir& dir, std::string_view name, std::string_view text) {
     dir.write(name, text);
     frost::io::ProcessSpec spec;
-    spec.executable =
-        frost::io::joinPath(frost::io::parentPath(clangdPath()), kWindows ? "clang-format.exe" : "clang-format")
-            .value_or("");
+    spec.executable = clangFormatCliPath();
     spec.arguments = {"-style=file", dir.join(name)};
     spec.workingDirectory = dir.path();
     auto run = frost::io::runToCompletion(frost::io::realProcessLauncher(), spec, {}, 60s);
