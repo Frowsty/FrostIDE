@@ -28,6 +28,7 @@
 #include "frost/ui/shell/main_toolbar.hpp"
 #include "frost/ui/shell/notifications.hpp"
 #include "frost/ui/shell/tool_window_manager.hpp"
+#include "frost/ui/test_results_tree.hpp"
 #include "frost/ui/toolwindows/engine_console.hpp"
 #include "frost/ui/toolwindows/trust_dialog.hpp"
 
@@ -36,6 +37,7 @@
 #include "workbench_rig.hpp"
 #include <QCoreApplication>
 #include <QLabel>
+#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QToolButton>
 #include <QTreeWidget>
@@ -292,6 +294,84 @@ TEST(R0ToolAblation, WithoutClangdCMakeAndLuaLsTheIdeSaysUnavailableAndShowsNoRe
     // Nothing that produces results was started: no clangd, no cmake, ninja or ctest, no LuaLS.
     EXPECT_EQ(launcher.count({"clangd", "lua-language-server"}), 0U) << "launches:" << launcher.describe();
     EXPECT_EQ(launcher.count(kBuildTools), 0U) << "launches:" << launcher.describe();
+}
+
+TEST(R0ToolAblation, MissingCTestAloneReportsUnavailableAndClearsPreviousResults) {
+    WorkDir profile("ctest-ablation-profile");
+    WorkDir dir("ctest-ablation-project");
+    const std::string project = R"(cmake_minimum_required(VERSION 3.21)
+project(CTestAblation NONE)
+enable_testing()
+add_test(NAME real_probe COMMAND "${CMAKE_COMMAND}" -E true)
+)";
+    dir.write("CMakeLists.txt", project);
+    RecordingLauncher launcher;
+    RigOptions options;
+    options.launcher = &launcher;
+    WorkbenchRig rig(profile, options);
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    rig.show();
+    ASSERT_TRUE(rig.workbench->openPath(dir.path()));
+    auto* service = rig.workbench->cmakeService();
+    ASSERT_NE(service, nullptr);
+    ASSERT_TRUE(waitFor([&] { return rig.workbench->cmakeTargetsCurrent(); }, 60s));
+    ASSERT_TRUE(service->lastConfigure() && service->lastConfigure()->succeeded());
+
+    rig.window->toolWindows().show(frost::app::kUnitTestsToolWindow);
+    auto* pane = rig.window->findChild<QWidget*>(QStringLiteral("unitTestsToolWindow"));
+    ASSERT_NE(pane, nullptr);
+    auto* tests = pane->findChild<frost::ui::TestResultsTree*>(QStringLiteral("unitTestsTreeWidget"));
+    auto* summary = pane->findChild<QLabel*>(QStringLiteral("unitTestsSummaryLabel"));
+    auto* runAll = pane->findChild<QPushButton*>(QStringLiteral("unitTestsRunAllButton"));
+    auto* refresh = pane->findChild<QPushButton*>(QStringLiteral("unitTestsRefreshButton"));
+    auto* output = pane->findChild<QPlainTextEdit*>(QStringLiteral("unitTestsOutputView"));
+    ASSERT_NE(tests, nullptr);
+    ASSERT_NE(summary, nullptr);
+    ASSERT_NE(runAll, nullptr);
+    ASSERT_NE(refresh, nullptr);
+    ASSERT_NE(output, nullptr);
+    ASSERT_TRUE(waitFor([&] { return !tests->testNames().empty(); }, 30s)) << summary->text().toStdString();
+    EXPECT_EQ(tests->testNames(), (std::vector<std::string>{"real_probe"}));
+    ASSERT_TRUE(runAll->isEnabled()) << runAll->toolTip().toStdString();
+    runAll->click();
+    ASSERT_TRUE(waitFor([&] { return summary->text().contains(QStringLiteral("1 passed, 0 failed")); }, 30s))
+        << summary->text().toStdString();
+    const auto ctestLaunches = launcher.count({"ctest"});
+    EXPECT_GE(ctestLaunches, 2U) << launcher.describe();
+
+    const auto original = service->model();
+    ASSERT_NE(original, nullptr);
+    auto ctest = nowhere(profile, "ctest");
+    std::ranges::replace(ctest, '\\', '/');
+    dir.write("CMakeLists.txt",
+              project + "set(CMAKE_CTEST_COMMAND \"" + ctest + "\" CACHE INTERNAL \"CTest ablation\" FORCE)\n");
+    ASSERT_TRUE(service->configure());
+    ASSERT_TRUE(waitFor([&] { return service->model() != original && rig.workbench->cmakeTargetsCurrent(); }, 60s));
+    ASSERT_TRUE(service->lastConfigure() && service->lastConfigure()->succeeded());
+    const auto current = service->model();
+    ASSERT_NE(current, nullptr);
+    const auto configuredCTest = current->cacheValue("CMAKE_CTEST_COMMAND");
+    ASSERT_TRUE(configuredCTest);
+    EXPECT_EQ(frost::io::normalizePath(*configuredCTest), frost::io::normalizePath(ctest));
+
+    rig.window->toolWindows().show(frost::app::kUnitTestsToolWindow);
+    refresh->click();
+    ASSERT_TRUE(waitFor([&] { return summary->text().contains(QStringLiteral("ctest is unavailable")); }, 10s))
+        << summary->text().toStdString();
+    EXPECT_TRUE(summary->isVisible());
+    EXPECT_TRUE(tests->testNames().empty());
+    EXPECT_EQ(tests->topLevelItemCount(), 0);
+    EXPECT_FALSE(summary->text().contains(QStringLiteral("passed")));
+    EXPECT_FALSE(summary->text().contains(QStringLiteral("failed")));
+    EXPECT_EQ(output->toPlainText(), summary->text());
+    for (const char* name : {"unitTestsRunAllButton", "unitTestsRunSelectedButton", "unitTestsRunFailedButton",
+                             "unitTestsDebugSelectedButton", "unitTestsStopButton"}) {
+        auto* action = pane->findChild<QPushButton*>(QString::fromLatin1(name));
+        ASSERT_NE(action, nullptr) << name;
+        EXPECT_FALSE(action->isEnabled()) << name;
+    }
+    EXPECT_TRUE(refresh->isEnabled());
+    EXPECT_EQ(launcher.count({"ctest"}), ctestLaunches) << launcher.describe();
 }
 
 /*

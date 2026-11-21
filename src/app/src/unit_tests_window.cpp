@@ -340,6 +340,8 @@ private:
         UnitTestsSource current = unitTestsSource(m_context);
         m_setup = current.setup;
         if (!m_setup) {
+            m_console.clear();
+            m_lastCommand.clear();
             m_tree->setTests({});
             setSummary(current.unavailable);
             m_unavailable = current.unavailable;

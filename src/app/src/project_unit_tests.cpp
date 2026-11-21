@@ -6,6 +6,7 @@
 // from ctest's output, never from this scan; a gutter test marker is RUN-10's.
 
 #include "frost/build/cmake_service.hpp"
+#include "frost/io/file_system.hpp"
 #include "frost/project/cmake_presets.hpp"
 #include "frost/project/trust_store.hpp"
 #include "frost/run/run_manager.hpp"
@@ -189,6 +190,12 @@ UnitTestsSource unitTestsSource(const UnitTestsWindowContext& context) {
     auto setup = run::ctestSetupFor(*model, *profile, preset);
     if (!setup) {
         out.unavailable = QStringLiteral("ctest is unavailable: %1").arg(toQs(setup.error().message()));
+        return out;
+    }
+    const auto executable = context.fs->status(setup->ctest);
+    if (!executable || executable->type != io::FileType::Regular) {
+        const QString reason = executable ? QStringLiteral("not a regular file") : toQs(executable.error().message());
+        out.unavailable = QStringLiteral("ctest is unavailable: %1 (%2)").arg(toQs(setup->ctest), reason);
         return out;
     }
     out.setup = std::move(*setup);
