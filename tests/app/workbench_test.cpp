@@ -2595,18 +2595,27 @@ TEST(Workbench, ProjectPropertiesDebuggingPageSavesToTheUserFileOnly) {
     WorkbenchRig rig(dir);
     rig.show();
     const std::string vcxproj = dir.read("App/App.vcxproj");
-    const std::string user = dir.read("App/App.vcxproj.user");
+    std::string user = dir.read("App/App.vcxproj.user");
     ASSERT_TRUE(user.contains("LocalDebuggerCommandArguments"));
     ASSERT_FALSE(vcxproj.contains("LocalDebugger"));
+    const std::string releaseGroup =
+        R"(  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'"><LocalDebuggerCommandArguments>--release untouched</LocalDebuggerCommandArguments></PropertyGroup>)";
+    const auto closingTag = user.rfind("</Project>");
+    ASSERT_NE(closingTag, std::string::npos);
+    user.insert(closingTag, releaseGroup + (user.contains("\r\n") ? "\r\n" : "\n"));
+    dir.write("App/App.vcxproj.user", user);
     bool inspected = false;
-    bool savedCalled = false;
-    QTimer::singleShot(0, rig.window.get(), [&] {
-        auto* dlg = rig.window->findChild<QDialog*>(QStringLiteral("projectPropertiesDialog"));
-        ASSERT_NE(dlg, nullptr);
-        const auto closeOnExit = qScopeGuard([dlg] {
-            if (dlg->isVisible())
-                dlg->reject();
-        });
+    int saved = 0;
+    int authorized = 0;
+    QString warningText;
+    inspectModal(rig.window.get(), QStringLiteral("projectPropertiesDialog"), [&](QDialog& dialog) {
+        auto* dlg = &dialog;
+        auto* pages = dlg->findChild<QTreeWidget*>(QStringLiteral("projectPropertiesTree"));
+        ASSERT_NE(pages, nullptr);
+        const auto debugging = pages->findItems(QStringLiteral("Debugging"), Qt::MatchExactly | Qt::MatchRecursive);
+        const auto page = std::ranges::find_if(debugging, [](const auto* item) { return item->parent() != nullptr; });
+        ASSERT_NE(page, debugging.end());
+        pages->setCurrentItem(*page);
         auto* args = dlg->findChild<QLineEdit*>(QStringLiteral("prop_Prop.LocalDebuggerCommandArguments"));
         auto* cwd = dlg->findChild<QLineEdit*>(QStringLiteral("prop_Prop.LocalDebuggerWorkingDirectory"));
         auto* command = dlg->findChild<QLineEdit*>(QStringLiteral("prop_Prop.LocalDebuggerCommand"));
@@ -2632,16 +2641,29 @@ TEST(Workbench, ProjectPropertiesDebuggingPageSavesToTheUserFileOnly) {
         args->setText(QStringLiteral("--print <changed> & more"));
         cwd->setText(QString());
         environment->setPlainText(QStringLiteral("FROST_TINY_VALUE=edited\nFROST_TINY_OTHER=2"));
-        auto* buttons = dlg->findChild<QDialogButtonBox*>();
-        QPushButton* ok = buttons != nullptr ? buttons->button(QDialogButtonBox::Ok) : nullptr;
-        ASSERT_NE(ok, nullptr);
-        ok->click();
+        QTimer::singleShot(0, dlg, [&dialog, &warningText] {
+            if (auto* warning = dialog.findChild<QMessageBox*>()) {
+                warningText = warning->text();
+                warning->accept();
+            }
+        });
+        clickOk(dialog);
         inspected = true;
     });
-    frost::app::showProjectPropertiesDialog(rig.window.get(), frost::io::realFileSystem(), dir.join("App/App.vcxproj"),
-                                            "Debug|x64", [&] { savedCalled = true; });
+    // Exercise the dialog's .user-only save with explicit test authority. Native Workbench
+    // applies its solution policy before granting authority (the approximate tests cover refusal).
+    frost::app::showProjectPropertiesDialog(
+        rig.window.get(), frost::io::realFileSystem(), dir.join("App/App.vcxproj"), "Debug|x64", [&] { ++saved; },
+        [&](std::string_view configuration, const frost::app::ProjectPropertyMap& changes) -> frost::Result<void> {
+            if (configuration != "Debug|x64" || !changes.empty())
+                return frost::fail(frost::ErrorCode::PermissionDenied, "Fixture admits only Debug|x64 user settings");
+            ++authorized;
+            return {};
+        });
     EXPECT_TRUE(inspected);
-    EXPECT_TRUE(savedCalled);
+    EXPECT_TRUE(warningText.isEmpty()) << warningText.toStdString();
+    EXPECT_EQ(authorized, 1);
+    EXPECT_EQ(saved, 1);
     EXPECT_EQ(dir.read("App/App.vcxproj"), vcxproj) << "debugger settings never go into the shared project file";
     // The writer's own output for the same edit (the writer is checked against MSBuild in
     // build_msbuild_tests): the Debug|x64 group changes, everything else of the file stays.
@@ -2658,6 +2680,7 @@ TEST(Workbench, ProjectPropertiesDebuggingPageSavesToTheUserFileOnly) {
         << written;
     EXPECT_FALSE(written.contains("LocalDebuggerWorkingDirectory")) << "a cleared field removes the value";
     EXPECT_TRUE(written.contains("<!-- SPDX-License-Identifier: Apache-2.0 -->")) << written;
+    EXPECT_TRUE(written.contains(releaseGroup));
 }
 
 TEST(Workbench, ProjectMembershipEditsAreRefusedAndLeaveSolutionFilesUnchanged) {
