@@ -303,9 +303,17 @@ target_include_directories(app_workbench_cpp_editor_tests PRIVATE ${FROST_SOURCE
     ${FROST_SOURCE_DIR}/src/app/src)
 target_compile_definitions(app_workbench_cpp_editor_tests PRIVATE ${_frost_workbench_definitions})
 target_compile_definitions(app_workbench_cpp_editor_tests PRIVATE
-    FROST_ANALYZER_BINARY="$<TARGET_FILE:frost-analyzer>"
     FROST_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}")
-add_dependencies(app_workbench_cpp_editor_tests frost-clang frost-analyzer)
+if(WIN32)
+    target_compile_definitions(app_workbench_cpp_editor_tests PRIVATE
+        FROST_TEST_VCTOOLS_DIR="${FROST_VCTOOLS_DIR}"
+        FROST_TEST_WINSDK_DIR="${FROST_WINSDK_DIR}"
+        FROST_TEST_WINSDK_VERSION="${FROST_WINSDK_VERSION}")
+elseif(DEFINED FROST_GCC_INSTALL_DIR)
+    target_compile_definitions(app_workbench_cpp_editor_tests PRIVATE
+        FROST_TEST_GCC_INSTALL_DIR="${FROST_GCC_INSTALL_DIR}")
+endif()
+frost_deploy_clang_platform(app_workbench_cpp_editor_tests)
 
 # R6 uses mandatory isolated real engines; these cases belong only to the corpus tier.
 include("${FROST_SOURCE_DIR}/tests/support/EngineCorpus.cmake")
@@ -513,7 +521,8 @@ frost_add_test(app_workbench_cpp_modules_tests QT
 target_include_directories(app_workbench_cpp_modules_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/app/src)
 target_compile_definitions(app_workbench_cpp_modules_tests PRIVATE ${_frost_workbench_definitions}
     FROST_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}")
-add_dependencies(app_workbench_cpp_modules_tests frost-clang)
+# Both test executables use the same configuration-specific runtime directory.
+add_dependencies(app_workbench_cpp_modules_tests app_workbench_cpp_editor_tests_platform_engine)
 
 # Explicit synthetic loopback partner; does not locate/load an Unreal installation or plug-in.
 frost_add_test(app_unreal_partner_protocol_tests QT

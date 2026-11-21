@@ -12,9 +12,11 @@
 #include "frost/lang/inspection.hpp"
 #include "frost/rpc/json.hpp"
 #include "frost/settings/keys.hpp"
+#include "frost/ui/shell/notifications.hpp"
 #include "frost/ui/toolwindows/problems.hpp"
 #include "frost/ui/toolwindows/trust_dialog.hpp"
 
+#include "clang/pinned_compiler_arguments.hpp"
 #include "support/crash_dialogs.hpp"
 #include "trusted_project_launcher.hpp"
 #include "workbench_rig.hpp"
@@ -23,6 +25,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <vector>
@@ -154,7 +157,14 @@ TEST(WorkbenchInspection, NativeAnalyzerPublishesActualCfgFindingsAndRefusesStal
     frost::test::disableCrashDialogs();
     WorkDir dir("r13-native-problems");
     auto& fs = fio::realFileSystem();
-    dir.write("guard.hpp", "inline constexpr int guard=0;\n");
+    constexpr auto headerBytes = "inline constexpr int guard=0;\n";
+#ifdef _WIN32
+    dir.write("guard.hpp", headerBytes);
+#else
+    dir.write("first.hpp", headerBytes);
+    dir.write("second.hpp", headerBytes);
+    std::filesystem::create_symlink("first.hpp", dir.join("guard.hpp"));
+#endif
     dir.write("sample.cpp", "#include \"guard.hpp\"\nint f(){int* p=nullptr;return *p;}\n");
     const auto source = dir.join("sample.cpp");
     const auto compiler = fio::normalizePath(FROST_TEST_CXX_COMPILER).value();
@@ -164,6 +174,7 @@ TEST(WorkbenchInspection, NativeAnalyzerPublishesActualCfgFindingsAndRefusesStal
 #else
     args.insert(args.end(), {"-std=c++20", "-c", source});
 #endif
+    frost::test::appendPinnedCompilerArguments(args);
     ASSERT_TRUE(
         fl::writeCompileCommands(fs, dir.join("build"), std::vector<fl::CompileCommand>{{dir.path(), source, args}}));
     frost::app::test::RigOptions options;
@@ -174,34 +185,57 @@ TEST(WorkbenchInspection, NativeAnalyzerPublishesActualCfgFindingsAndRefusesStal
     ASSERT_TRUE(
         rig.settings->set(frost::settings::Scope::Application, frost::settings::key::cppAnalyzerEnabled, false));
     ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::analysisPowerSave, true));
-    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsFrostAnalyzerPath,
-                                  std::string(FROST_ANALYZER_BINARY)));
     rig.show();
     ASSERT_TRUE(rig.workbench->openPath(dir.path()));
     ASSERT_TRUE(rig.workbench->openPath(source));
     ASSERT_TRUE(waitFor(
         [&] { return rig.workbench->clangd() && rig.workbench->clangd()->compileCommands().has_value(); }, 60s));
+    // Apply the settings queued by project opening before invoking the UI action.
+    QCoreApplication::sendPostedEvents(rig.workbench.get(), QEvent::MetaCall);
     const auto action = rig.workbench->registry().find("code.inspectNativeCpp");
     ASSERT_TRUE(action);
     EXPECT_EQ(rig.workbench->registry().tryInvoke(*action, {}), frost::input::InvokeResult::Ran);
-    ASSERT_TRUE(waitFor(
-        [&] {
-            const auto& rows = rig.workbench->problems()->model()->problems();
-            return std::ranges::any_of(rows, [](const auto& row) {
-                return row.source == frost::ui::DiagnosticSource::Inspection &&
-                       row.diagnostic.diagnostic.code == "frost-null-dereference";
-            });
-        },
-        120s));
+    const auto outcome = [&]() -> std::optional<QString> {
+        for (const auto& entry : rig.window->notifications().log())
+            if (entry.notification.title == QStringLiteral("Native C++ analysis unavailable") ||
+                entry.notification.title == QStringLiteral("Native C++ analysis"))
+                return entry.notification.text;
+        return {};
+    };
+    const auto hasFinding = [&] {
+        const auto& rows = rig.workbench->problems()->model()->problems();
+        return std::ranges::any_of(rows, [](const auto& row) {
+            return row.source == frost::ui::DiagnosticSource::Inspection &&
+                   row.diagnostic.diagnostic.code == "frost-null-dereference";
+        });
+    };
+    ASSERT_TRUE(waitFor([&] { return hasFinding() || outcome().has_value(); }, 120s));
+    ASSERT_TRUE(hasFinding()) << outcome().value_or(QString()).toStdString();
     const auto report = dir.join("native.sarif");
-    ASSERT_TRUE(rig.workbench->exportCppInspectionSarif(report));
+    const auto exported = rig.workbench->exportCppInspectionSarif(report);
+    ASSERT_TRUE(exported) << exported.error().describe();
     auto bytes = fs.readFile(report);
     ASSERT_TRUE(bytes);
     auto json = frost::rpc::parseJson(*bytes);
     ASSERT_TRUE(json);
     ASSERT_TRUE(fl::validateSarifSchema(*json));
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::cppAnalyzerRules,
+                                  frost::settings::StringList{"frost-null-dereference=off"}));
+    const auto changedRules = rig.workbench->exportCppInspectionSarif(dir.join("changed-rules.sarif"));
+    ASSERT_FALSE(changedRules);
+    EXPECT_EQ(changedRules.error().code(), frost::ErrorCode::Busy);
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::cppAnalyzerRules,
+                                  frost::settings::StringList{}));
+    ASSERT_TRUE(rig.workbench->exportCppInspectionSarif(report));
+#ifdef _WIN32
     dir.write("guard.hpp", "inline constexpr int guard=1;\n");
-    EXPECT_FALSE(rig.workbench->exportCppInspectionSarif(dir.join("stale.sarif")));
+#else
+    ASSERT_TRUE(std::filesystem::remove(dir.join("guard.hpp")));
+    std::filesystem::create_symlink("second.hpp", dir.join("guard.hpp"));
+#endif
+    const auto stale = rig.workbench->exportCppInspectionSarif(dir.join("stale.sarif"));
+    ASSERT_FALSE(stale);
+    EXPECT_EQ(stale.error().code(), frost::ErrorCode::Busy);
 }
 
 TEST(WorkbenchInspection, UntrustedProjectCannotStartCppInspection) {
@@ -269,6 +303,10 @@ TEST(WorkbenchInspection, SwitchingProjectsCancelsAnInspectionWaitingForResource
     ASSERT_TRUE(rig.workbench->openPath(dir.path()).has_value());
 
     ASSERT_NE(rig.workbench->resourceGovernor(), nullptr);
+    const auto tidyLaunches = [&] {
+        return std::ranges::count_if(launcher.launches(),
+                                     [&](const auto& launch) { return launch.spec.executable == tidyPath; });
+    };
     bool completionCalled = false;
     {
         auto heldInspectionSlot =
@@ -276,7 +314,7 @@ TEST(WorkbenchInspection, SwitchingProjectsCancelsAnInspectionWaitingForResource
         ASSERT_TRUE(heldInspectionSlot.has_value());
         rig.workbench->inspectCppCodeAsync(dir.path(),
                                            [&](frost::Result<fl::InspectionReport>) { completionCalled = true; });
-        ASSERT_TRUE(waitFor([&] { return launcher.launches().size() == 1; }));
+        ASSERT_TRUE(waitFor([&] { return tidyLaunches() == 1 && launcher.pendingScripts() == 0; }));
         ASSERT_TRUE(rig.workbench->openPath(next.path()).has_value());
     }
     const QDeadlineTimer cancelDeadline(250);
@@ -285,7 +323,7 @@ TEST(WorkbenchInspection, SwitchingProjectsCancelsAnInspectionWaitingForResource
         QThread::msleep(5);
     }
     EXPECT_FALSE(completionCalled);
-    EXPECT_EQ(launcher.launches().size(), 1u);
+    EXPECT_EQ(tidyLaunches(), 1);
     EXPECT_EQ(launcher.pendingScripts(), 0u);
 }
 

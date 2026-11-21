@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Future real native recovered-AST -> preview plan -> atomic header Apply/Undo integration.
+#include "frost/io/path.hpp"
 #include "frost/lang/compile_commands.hpp"
 #include "frost/lang/cpp_refactoring_plan.hpp"
 #include "frost/ui/editor/editor_view.hpp"
 
+#include "clang/pinned_compiler_arguments.hpp"
 #include "support/crash_dialogs.hpp"
 #include "workbench_rig.hpp"
 #include <gtest/gtest.h>
@@ -23,9 +25,16 @@ TEST(WorkbenchCreateUsage, OriginalUnresolvedCallProducesActualHeaderPlanWithSta
     dir.write("src/main.cpp", sourceBefore);
     dir.write("src/box.hpp", headerBefore);
     const auto source = dir.join("src/main.cpp"), header = dir.join("src/box.hpp");
-    ASSERT_TRUE(lang::writeCompileCommands(
-        io::realFileSystem(), dir.join("build"),
-        std::vector<lang::CompileCommand>{{dir.path(), source, {"clang++", "-std=c++20", "-c", source}}}));
+    const auto compiler = io::normalizePath(FROST_TEST_CXX_COMPILER).value();
+#ifdef _WIN32
+    std::vector<std::string> arguments{compiler, "/std:c++20", "/c", source};
+#else
+    std::vector<std::string> arguments{compiler, "-std=c++20", "-c", source};
+#endif
+    frost::test::appendPinnedCompilerArguments(arguments);
+    ASSERT_TRUE(
+        lang::writeCompileCommands(io::realFileSystem(), dir.join("build"),
+                                   std::vector<lang::CompileCommand>{{dir.path(), source, std::move(arguments)}}));
     RigOptions options;
     options.workbench.clangd = true;
     options.workbench.clangdJobs = 1;

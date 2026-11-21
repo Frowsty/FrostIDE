@@ -278,11 +278,11 @@ endif()
 
 function(frost_deploy_clang_platform target)
     # Copy, never link, the isolated /MT LLVM engine into the application's runtime directory.
-    add_custom_target(frost_platform_engine
+    add_custom_target(${target}_platform_engine
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             $<TARGET_FILE:frost-clang> $<TARGET_FILE:frost-analyzer> $<TARGET_FILE_DIR:${target}>
         DEPENDS frost-clang frost-analyzer VERBATIM)
-    add_dependencies(${target} frost_platform_engine)
+    add_dependencies(${target} ${target}_platform_engine)
 endfunction()
 
 function(frost_stage_lua_test_bridge target)

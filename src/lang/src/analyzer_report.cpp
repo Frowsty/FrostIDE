@@ -3,6 +3,7 @@
 #include "frost/io/path.hpp"
 #include "frost/io/spawn_log.hpp"
 #include "frost/lang/analyzer.hpp"
+#include "frost/lang/cpp_index.hpp"
 #include "frost/lang/uri.hpp"
 
 #include <algorithm>
@@ -85,19 +86,23 @@ Result<void> append(AnalyzerReport& report, const Json& body, const AnalyzerRequ
         }
         const auto overlay = std::ranges::find_if(
             request.overlays, [&](const auto& value) { return documentKey(value.path) == documentKey(path); });
-        auto bytes = overlay == request.overlays.end() ? fs.readFileSnapshot(path, 64U * 1024U * 1024U)
-                                                       : Result<std::string>(overlay->contents);
-        if (!bytes || bytes->size() != *size || io::sha256Hex(*bytes) != hash)
+        const bool isOverlay = overlay != request.overlays.end();
+        auto input = [&]() -> Result<CppCompilerInput> {
+            if (!isOverlay)
+                return readCppCompilerInput(fs, path);
+            auto physical = fs.physicalPath(path);
+            if (!physical)
+                return std::unexpected(physical.error());
+            return CppCompilerInput{std::move(*physical), overlay->contents};
+        }();
+        if (!input || input->bytes.size() != *size || io::sha256Hex(input->bytes) != hash)
             return fail(ErrorCode::Busy, "Analyzer dependency changed: " + path);
-        std::size_t total = bytes->size();
+        std::size_t total = input->bytes.size();
         for (const auto& prior : report.inputs)
             total += prior.bytes.size();
         if (total > 512U * 1024U * 1024U || report.inputs.size() >= 32768)
             return fail(ErrorCode::OutOfRange, "Analyzer scope inputs exceed512MiB/32768 files");
-        auto physical = fs.physicalPath(path);
-        if (!physical)
-            return std::unexpected(physical.error());
-        report.inputs.push_back({path, std::move(*bytes), *physical, overlay != request.overlays.end()});
+        report.inputs.push_back({path, std::move(input->bytes), std::move(input->canonicalPath), isOverlay});
     }
     for (const auto key : {"missingDependencies", "directoryDependencies"}) {
         const auto* values = body.find(key);

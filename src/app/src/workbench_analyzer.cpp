@@ -25,6 +25,34 @@ namespace {
 using Images = std::map<std::string, std::string>;
 QString qs(std::string_view text) { return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size())); }
 
+struct AnalyzerSettings {
+    std::string executable;
+    std::vector<std::string> rules;
+    bool enabled;
+    bool onSave;
+    bool powerSave;
+    bool operator==(const AnalyzerSettings&) const = default;
+};
+
+AnalyzerSettings analyzerSettings(const settings::SettingsSnapshot& snapshot) {
+    AnalyzerSettings captured{.executable = snapshot.get(settings::key::toolsFrostAnalyzerPath),
+                              .rules = {},
+                              .enabled = snapshot.get(settings::key::cppAnalyzerEnabled),
+                              .onSave = snapshot.get(settings::key::cppAnalyzerOnSave),
+                              .powerSave = snapshot.get(settings::key::analysisPowerSave)};
+#define FROST_ANALYZER_RULE(id, title, category, level, applicability, key, cfg)                                       \
+    {                                                                                                                  \
+        const auto value = snapshot.get(settings::Key<std::string>{key});                                              \
+        if (value != "default")                                                                                        \
+            captured.rules.emplace_back(std::string(id) + "=" + value);                                                \
+    }
+#include "../../../resources/analyzer_rules.inc"
+#undef FROST_ANALYZER_RULE
+    const auto& overrides = snapshot.get(settings::key::cppAnalyzerRules);
+    captured.rules.insert(captured.rules.end(), overrides.begin(), overrides.end());
+    return captured;
+}
+
 build::Severity problemSeverity(lang::InspectionSeverity severity) noexcept {
     switch (severity) {
     case lang::InspectionSeverity::Error: return build::Severity::Error;
@@ -146,19 +174,8 @@ void Workbench::inspectNativeCppAsync(std::string_view scopePath, bool automatic
     auto scope = io::normalizePath(scopePath);
     if (!scope || !io::isAbsolutePath(*scope) || !isPathWithin(m_projectRoot, *scope))
         return;
-    const auto settings = m_services.settings.snapshot();
-    std::vector<std::string> entries;
-#define FROST_ANALYZER_RULE(id, title, category, level, applicability, key, cfg)                                       \
-    {                                                                                                                  \
-        const auto value = settings->get(settings::Key<std::string>{key});                                             \
-        if (value != "default")                                                                                        \
-            entries.emplace_back(std::string(id) + "=" + value);                                                       \
-    }
-#include "../../../resources/analyzer_rules.inc"
-#undef FROST_ANALYZER_RULE
-    const auto& overrides = settings->get(settings::key::cppAnalyzerRules);
-    entries.insert(entries.end(), overrides.begin(), overrides.end());
-    auto profile = lang::analyzerProfile(entries);
+    const auto settings = analyzerSettings(*m_services.settings.snapshot());
+    auto profile = lang::analyzerProfile(settings.rules);
     if (!profile) {
         if (!automatic)
             notify(QStringLiteral("Native analyzer profile invalid"), qs(profile.error().message()),
@@ -166,7 +183,7 @@ void Workbench::inspectNativeCppAsync(std::string_view scopePath, bool automatic
         return;
     }
     lang::AnalyzerRequest request;
-    request.executable = settings->get(settings::key::toolsFrostAnalyzerPath);
+    request.executable = settings.executable;
     if (request.executable.empty())
         request.executable = QDir(QCoreApplication::applicationDirPath())
                                  .filePath(
@@ -226,7 +243,8 @@ void Workbench::inspectNativeCppAsync(std::string_view scopePath, bool automatic
                 self->m_cppAnalyzerRunning = false;
                 const auto permission = self->m_services.trust.snapshot(root);
                 if (root != self->m_projectRoot || server != self->m_clangd || !permission.trusted ||
-                    permission.revision != revision || settings != self->m_services.settings.snapshot())
+                    permission.revision != revision ||
+                    settings != analyzerSettings(*self->m_services.settings.snapshot()))
                     return;
                 const auto database = self->m_clangd->compileCommands();
                 if (!database || database->file != databasePath)
@@ -248,7 +266,7 @@ void Workbench::inspectNativeCppAsync(std::string_view scopePath, bool automatic
                 auto retained = std::make_shared<lang::AnalyzerReport>(std::move(*result));
                 self->m_cppAnalyzerExportCheck = [self, retained, images, settings, root, server, revision,
                                                   databasePath]() -> Result<void> {
-                    if (!self || self->m_services.settings.snapshot() != settings)
+                    if (!self || analyzerSettings(*self->m_services.settings.snapshot()) != settings)
                         return fail(ErrorCode::Busy, "Analyzer settings changed");
                     const auto permission = self->m_services.trust.snapshot(root);
                     if (self->m_projectRoot != root || self->m_clangd != server || !permission.trusted ||

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Typed severity/profile settings shared by native analysis and existing inspection filtering.
 #include "frost/lang/analyzer.hpp"
-#include "frost/lang/uri.hpp"
+#include "frost/lang/cpp_index.hpp"
 namespace frost::lang {
 Result<InspectionProfile> analyzerProfile(std::span<const std::string> entries) {
     InspectionProfile profile;
@@ -30,13 +30,17 @@ Result<InspectionProfile> analyzerProfile(std::span<const std::string> entries) 
 }
 Result<void> validateAnalyzerInputs(io::IFileSystem& fs, const AnalyzerReport& report) {
     for (const auto& image : report.inputs) {
-        auto physical = fs.physicalPath(image.path);
-        if (!physical || documentKey(*physical) != documentKey(image.physicalPath))
+        if (image.overlay) {
+            // Caller separately retains and validates exact editor snapshots.
+            const auto physical = fs.physicalPath(image.path);
+            if (!physical || *physical != image.physicalPath)
+                return fail(ErrorCode::Busy, "Analyzer input identity changed: " + image.path);
+            continue;
+        }
+        const auto input = readCppCompilerInput(fs, image.path);
+        if (!input || input->canonicalPath != image.physicalPath)
             return fail(ErrorCode::Busy, "Analyzer input identity changed: " + image.path);
-        if (image.overlay)
-            continue; // Caller separately retains and validates its exact editor snapshots.
-        auto bytes = fs.readFileSnapshot(image.path, 64U * 1024U * 1024U);
-        if (!bytes || *bytes != image.bytes)
+        if (input->bytes != image.bytes)
             return fail(ErrorCode::Busy, "Analyzer input changed: " + image.path);
     }
     for (const auto& path : report.missing) {
