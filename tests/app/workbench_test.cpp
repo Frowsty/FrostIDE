@@ -3430,7 +3430,8 @@ TEST(Workbench, ApproximateSolutionRefusesMembershipRenameButSourceTextRemainsEd
     ASSERT_TRUE(rig.workbench->openPath(dir.join("App/main.cpp")));
     auto* view = rig.view();
     ASSERT_NE(view, nullptr);
-    auto edited = view->editor().document().replace({0, 0}, "// ordinary source edit\n", {});
+    auto edited = view->editor().document().replace({frost::ByteOffset{0}, frost::ByteOffset{0}},
+                                                    "// ordinary source edit\n", {});
     ASSERT_TRUE(edited);
     EXPECT_TRUE(view->editor().followExternalChange(*edited));
     EXPECT_TRUE(view->document().dirty());

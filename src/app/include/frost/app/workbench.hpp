@@ -241,8 +241,8 @@ struct NewProjectSpec {
     std::string name;
     std::string location;
     NewProjectTemplate kind = NewProjectTemplate::CMakeExecutable;
-    std::string author;
-    std::string description;
+    std::string author{};
+    std::string description{};
 };
 
 struct SourceTemplateSpec {

@@ -127,14 +127,17 @@ TEST(WorkbenchBindingCorpus, ActualWidgetsAndGenericLuaActionsMatchRawProvidersA
     const auto luaPath =
         io::joinPath(sdk, "luals-" + std::string(lang::pinnedLuaLanguageServerVersion()) + "/bin/" + luaName);
     ASSERT_TRUE(luaPath);
-    auto lua = lang::findLuaLanguageServer(fs, {.configuredPath = *luaPath});
+    lang::LuaSearch luaSearch;
+    luaSearch.configuredPath = *luaPath;
+    auto lua = lang::findLuaLanguageServer(fs, luaSearch);
     ASSERT_TRUE(lua);
 
     WorkDir profile("binding-real-workbench");
     RigOptions options;
     options.workbench.clangd = true;
     options.workbench.engineBindingToolPath = FROST_CLANG_BINARY;
-    options.workbench.luaSearch = lang::LuaSearch{.configuredPath = *lua};
+    luaSearch.configuredPath = *lua;
+    options.workbench.luaSearch = std::move(luaSearch);
     // Providers/Workbench are destroyed before this pool, including on a failed ASSERT.
     sched::ThreadPool oraclePool({.workerCount = 2});
     OraclePendingTasks pendingOracleTasks;

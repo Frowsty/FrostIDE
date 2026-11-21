@@ -34,7 +34,7 @@ TEST(WorkbenchLuaRuntime, RunUsesExplicitInterpreterAndDirtyScriptSavePolicy) {
     rig.workbench->runController()->setStoredConfigurations({config});
     ASSERT_TRUE(rig.workbench->runController()->selectConfiguration(config.id));
     ASSERT_TRUE(rig.workbench->openPath(config.target));
-    ASSERT_TRUE(rig.view()->editor().document().replace({0, 0}, "-- saved before Lua\n", {}));
+    ASSERT_TRUE(rig.view()->editor().document().replace({ByteOffset{0}, ByteOffset{0}}, "-- saved before Lua\n", {}));
     launcher.expect({.expectExecutable = config.program});
     auto started = rig.workbench->runController()->run();
     ASSERT_TRUE(started) << started.error().describe();

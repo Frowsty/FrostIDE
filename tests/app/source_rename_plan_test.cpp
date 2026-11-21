@@ -201,7 +201,7 @@ TEST(SourceRenameWorkbench, DirtyOpenSourceAndMetadataRenameAndUndoAsOneOperatio
     ASSERT_TRUE(rig.workbench->openPath(dir.join("workspace/old.cpp")));
     auto* view = rig.view();
     ASSERT_NE(view, nullptr);
-    auto changed = view->editor().document().replace({0, 0}, "// unsaved\n", {});
+    auto changed = view->editor().document().replace({ByteOffset{0}, ByteOffset{0}}, "// unsaved\n", {});
     ASSERT_TRUE(changed);
     ASSERT_TRUE(view->editor().followExternalChange(*changed));
     ASSERT_TRUE(view->document().dirty());
