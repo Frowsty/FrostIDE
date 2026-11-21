@@ -209,8 +209,8 @@ TEST(WorkbenchClangd, LiveDiagnosticsAppearAndClearAfterTheFix) {
 
     const bool gotLiveErrors = waitFor([&] { return !liveErrors(*rig.workbench).empty(); }, kPatience);
     const auto* clangd = rig.workbench->clangd();
-    ASSERT_TRUE(gotLiveErrors)
-        << "no live diagnostic; clangd state " << (clangd ? static_cast<int>(clangd->state()) : -1);
+    ASSERT_TRUE(gotLiveErrors) << "no live diagnostic; clangd state "
+                               << (clangd ? static_cast<int>(clangd->state()) : -1);
     const std::vector<frost::ui::Problem> errors = liveErrors(*rig.workbench);
     EXPECT_EQ(errors.front().diagnostic.diagnostic.line, 2);
     EXPECT_NE(errors.front().diagnostic.diagnostic.message.find("missing_value"), std::string::npos);
