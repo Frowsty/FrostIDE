@@ -485,18 +485,23 @@ TEST(TestRunnerGutterMapping, AListedFilteredGoogleTestCaseMapsToItsSourceDeclar
 }
 
 TEST(TestRunnerGutterMapping, ACombinedCTestFilterBecomesSeparateExactGutterCases) {
+#ifdef _WIN32
+    const std::string build = "E:/build";
+#else
+    const std::string build = "/build";
+#endif
     frost::run::DiscoveredTest test;
     test.name = "both";
-    test.command = {"E:/build/tests.exe", "--gtest_filter=Suite.One:Suite.Two"};
+    test.command = {build + "/tests.exe", "--gtest_filter=Suite.One:Suite.Two"};
     test.gtestFilter = "Suite.One:Suite.Two";
     const std::string source = "TEST(Suite, One) {}\nTEST(Suite, Two) {}\n";
-    auto cases = frost::run::resolveGutterTestCasesInFile("E:/src/test.cpp", source,
+    auto cases = frost::run::resolveGutterTestCasesInFile(build + "/test.cpp", source,
                                                           std::span<const frost::run::DiscoveredTest>(&test, 1));
     ASSERT_EQ(cases.size(), 2U);
     EXPECT_EQ(cases[0].caseName, "Suite.One");
     EXPECT_EQ(cases[1].caseName, "Suite.Two");
     frost::run::CTestSetup setup;
-    setup.buildDirectory = "E:/build";
+    setup.buildDirectory = build;
     for (const auto& resolved : cases) {
         const auto launch =
             frost::run::buildSingleTestLaunch(setup, resolved.test, resolved.caseName, resolved.framework);
