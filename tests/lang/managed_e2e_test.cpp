@@ -12,6 +12,7 @@
 
 #include "../../src/lang/src/timeout.hpp"
 #include "support/managed_profile_guard.hpp"
+#include "support/managed_service_shutdown.hpp"
 #include "support/scratch_dir.hpp"
 #include <gtest/gtest.h>
 
@@ -28,8 +29,8 @@ using namespace std::chrono_literals;
 using namespace frost;
 
 sched::Task<Result<lang::Json>> request(sched::IScheduler& scheduler, lang::ManagedService& service, std::string method,
-                                        lang::Json params) {
-    lang::detail::Deadline deadline(scheduler, 3s);
+                                        lang::Json params, IClock::Duration timeout = 3s) {
+    lang::detail::Deadline deadline(scheduler, timeout);
     co_return co_await service.request(std::move(method), std::move(params), deadline.token());
 }
 lang::Json positionParams(const std::string& uri, int column) {
@@ -114,6 +115,8 @@ TEST(ManagedE2E, UnsavedCrossProjectUtf16NavigationAndRename) {
     auto& fs = io::realFileSystem();
     ASSERT_TRUE(fs.createDirectories(scratch.join("App")).has_value());
     ASSERT_TRUE(fs.createDirectories(scratch.join("Lib")).has_value());
+    ASSERT_TRUE(fs.writeFileAtomic(scratch.join("NuGet.Config"),
+                                   "<configuration><packageSources><clear/></packageSources></configuration>"));
     ASSERT_TRUE(
         fs.writeFileAtomic(scratch.join("Probe.slnx"),
                            R"(<Solution><Project Path="Lib/Lib.csproj"/><Project Path="App/App.csproj"/></Solution>)")
@@ -164,6 +167,7 @@ TEST(ManagedE2E, UnsavedCrossProjectUtf16NavigationAndRename) {
     ASSERT_TRUE(reactor.has_value());
     sched::ThreadPool pool(sched::ThreadPoolOptions{.workerCount = 2});
     lang::ManagedService service(io::realProcessLauncher(), {**reactor, pool}, options);
+    test::ManagedServiceShutdown shutdown{service, **reactor, pool};
     auto appText =
         text::Document::fromUtf8("using Library; public class Example { public string Run() { var s = "
                                  "\"\xf0\x9f\x98\x80\"; return new Greeter().SayHello(); MissingMethod(); } }\n");
@@ -196,7 +200,7 @@ TEST(ManagedE2E, UnsavedCrossProjectUtf16NavigationAndRename) {
         auto library =
             pool.spawn(sched::Lane::UserVisible,
                        request(pool, service, "frost/managed/librarySource",
-                               positionParams(*uri, 47).set("mode", "decompiled").set("allowSourceLink", false)))
+                               positionParams(*uri, 47).set("mode", "decompiled").set("allowSourceLink", false), 15s))
                 .join();
         ASSERT_TRUE(library) << library.error().describe();
         ASSERT_TRUE(library->isObject());
@@ -214,9 +218,10 @@ TEST(ManagedE2E, UnsavedCrossProjectUtf16NavigationAndRename) {
         EXPECT_NE(evaluated->dump().find("Lib.csproj"), std::string::npos);
         EXPECT_NE(evaluated->dump().find("Greeter.cs"), std::string::npos);
         auto completion = pool.spawn(sched::Lane::UserVisible,
-                                     request(pool, service, "textDocument/completion", positionParams(*uri, 97)))
+                                     request(pool, service, "textDocument/completion", positionParams(*uri, 97), 15s))
                               .join();
-        EXPECT_TRUE(completion && completion->dump().find("SayHello") != std::string::npos);
+        ASSERT_TRUE(completion) << completion.error().describe();
+        EXPECT_NE(completion->dump().find("SayHello"), std::string::npos);
         auto definition = pool.spawn(sched::Lane::UserVisible,
                                      request(pool, service, "textDocument/definition", positionParams(*uri, 98)))
                               .join();
@@ -351,9 +356,7 @@ TEST(ManagedE2E, UnsavedCrossProjectUtf16NavigationAndRename) {
         std::this_thread::sleep_for(100ms);
     }
     EXPECT_TRUE(diagnosed) << "the unsaved missing method was not diagnosed";
-    pool.spawn(sched::Lane::UserVisible, service.stop()).join();
+    shutdown.stop();
     EXPECT_EQ(service.state(), lang::LuaState::Stopped);
-    (*reactor)->shutdown();
-    pool.shutdown();
 }
 } // namespace

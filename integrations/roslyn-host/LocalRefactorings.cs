@@ -69,7 +69,7 @@ internal sealed class LocalRefactorings : ISemanticFeature, ISemanticContributio
                     var replacement = final.WithExpression(variable.Initializer.Value.WithTriviaFrom(identifier))
                         .WithLeadingTrivia(declaration.GetLeadingTrivia().AddRange(final.GetLeadingTrivia())).WithAdditionalAnnotations(Formatter.Annotation);
                     await Propose("Inline return local (Roslyn)", "refactor.inline", root.ReplaceNode(enclosing,
-                        enclosing.WithStatements(enclosing.Statements.RemoveAt(index - 1).Replace(final, replacement))));
+                        enclosing.WithStatements(enclosing.Statements.Replace(final, replacement).RemoveAt(index - 1))));
                 }
             }
         }
