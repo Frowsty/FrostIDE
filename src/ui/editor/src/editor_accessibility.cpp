@@ -132,9 +132,14 @@ public:
         if (!validRange(start, end))
             return;
         auto ranges = selected();
-        if (index < 0 || static_cast<std::size_t>(index) >= ranges.size())
+        if (index < 0 || static_cast<std::size_t>(index) > ranges.size())
             return;
-        ranges[static_cast<std::size_t>(index)] = {byte(start), byte(end)};
+        const text::Selection range{byte(start), byte(end)};
+        // Qt's AT-SPI bridge implements AddSelection as setSelection(selectionCount(), ...).
+        if (static_cast<std::size_t>(index) == ranges.size())
+            ranges.push_back(range);
+        else
+            ranges[static_cast<std::size_t>(index)] = range;
         setSelections(ranges);
     }
     void removeSelection(int index) override {

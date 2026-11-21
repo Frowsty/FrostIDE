@@ -84,6 +84,49 @@ TEST(EditorView, NativeAccessibilityReadsUtf16SelectionsAndEditsThroughUndo) {
     edit->replaceText(0, 1, QStringLiteral("x"));
     EXPECT_EQ(h.text(), "a\xF0\x9F\x98\x80z\nnext");
 }
+TEST(EditorView, NativeAccessibilityAddsSelectionAtCountAndRejectsInvalidIndices) {
+    FROST_REQUIRE_OFFSCREEN();
+    EditorHarness h("a\xF0\x9F\x98\x80z\nnext");
+    auto* accessible = QAccessible::queryAccessibleInterface(h.view.get());
+    ASSERT_NE(accessible, nullptr);
+    auto* text = accessible->textInterface();
+    ASSERT_NE(text, nullptr);
+    text->setCursorPosition(3);
+    ASSERT_EQ(text->selectionCount(), 0);
+    text->setSelection(-1, 1, 3);
+    text->setSelection(1, 1, 3);
+    text->setSelection(0, 3, 1);
+    EXPECT_EQ(text->selectionCount(), 0);
+    EXPECT_EQ(text->cursorPosition(), 3);
+
+    // Qt AT-SPI uses this sequence for its first and subsequent AddSelection requests.
+    text->setSelection(text->selectionCount(), 1, 3);
+    ASSERT_EQ(text->selectionCount(), 1);
+    text->setSelection(text->selectionCount(), 5, 7);
+    ASSERT_EQ(text->selectionCount(), 2);
+    EXPECT_EQ(text->cursorPosition(), 7);
+
+    int begin = -1, end = -1;
+    text->selection(0, &begin, &end);
+    EXPECT_EQ(begin, 1);
+    EXPECT_EQ(end, 3);
+    text->setSelection(3, 0, 1);
+    text->setSelection(2, 7, 10);
+    text->setSelection(-1, 0, 1);
+    EXPECT_EQ(text->selectionCount(), 2);
+    EXPECT_EQ(text->cursorPosition(), 7);
+    text->selection(1, &begin, &end);
+    EXPECT_EQ(begin, 5);
+    EXPECT_EQ(end, 7);
+
+    text->setSelection(1, 6, 8);
+    ASSERT_EQ(text->selectionCount(), 2);
+    text->selection(1, &begin, &end);
+    EXPECT_EQ(begin, 6);
+    EXPECT_EQ(end, 8);
+    EXPECT_EQ(text->cursorPosition(), 8);
+}
+
 TEST(EditorView, NativeAccessibilityExposesResolvedDiagnosticRunsAndCaretMessages) {
     FROST_REQUIRE_OFFSCREEN();
     EditorHarness h("abcdef");
