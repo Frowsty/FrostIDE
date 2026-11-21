@@ -85,7 +85,8 @@ public:
     [[nodiscard]] Result<UpdateOutcome> applyUpdate(const SafeUpdateSpec& spec) const;
 
 private:
-    [[nodiscard]] Result<void> stagePayload(const SafeUpdateSpec& spec, std::string_view stageDir) const;
+    [[nodiscard]] Result<void> stagePayload(const SafeUpdateSpec& spec, std::string_view stageDir,
+                                            std::optional<bool> compressed) const;
     [[nodiscard]] Result<void> extractZipArchive(std::string_view zipPath, std::string_view destDir,
                                                  IClock::Duration timeout) const;
     [[nodiscard]] Result<void> copyDirectoryTree(std::string_view srcDir, std::string_view dstDir) const;

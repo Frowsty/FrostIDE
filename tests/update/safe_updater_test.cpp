@@ -18,6 +18,12 @@
 
 #include <sodium.h>
 
+#ifdef _WIN32
+#include <windows.h>
+
+#include <winioctl.h>
+#endif
+
 namespace frost::update {
 namespace {
 
@@ -104,6 +110,78 @@ protected:
     std::filesystem::path m_root;
     std::string m_baseHelperImage;
 };
+
+#ifdef _WIN32
+TEST_F(SafeUpdaterTest, SideBySidePreservesExistingDirectoryCompression) {
+    const HANDLE volumeProbe =
+        CreateFileW(m_root.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    ASSERT_NE(volumeProbe, INVALID_HANDLE_VALUE);
+    DWORD flags = 0;
+    const BOOL queried = GetVolumeInformationByHandleW(volumeProbe, nullptr, 0, nullptr, nullptr, &flags, nullptr, 0);
+    CloseHandle(volumeProbe);
+    ASSERT_TRUE(queried);
+    if ((flags & FILE_FILE_COMPRESSION) == 0)
+        GTEST_SKIP() << "The scratch volume does not support native file compression";
+
+    const auto setCompression = [](const std::filesystem::path& directory, bool compressed) {
+        const HANDLE handle =
+            CreateFileW(directory.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                        OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+        ASSERT_NE(handle, INVALID_HANDLE_VALUE);
+        USHORT format = compressed ? COMPRESSION_FORMAT_DEFAULT : COMPRESSION_FORMAT_NONE;
+        DWORD bytes = 0;
+        const BOOL changed =
+            DeviceIoControl(handle, FSCTL_SET_COMPRESSION, &format, sizeof(format), nullptr, 0, &bytes, nullptr);
+        const DWORD error = changed ? ERROR_SUCCESS : GetLastError();
+        CloseHandle(handle);
+        ASSERT_TRUE(changed) << error;
+    };
+    const auto expectCompression = [](const std::filesystem::path& path, bool compressed) {
+        const DWORD attributes = GetFileAttributesW(path.c_str());
+        ASSERT_NE(attributes, INVALID_FILE_ATTRIBUTES) << path;
+        EXPECT_EQ((attributes & FILE_ATTRIBUTE_COMPRESSED) != 0, compressed) << path;
+    };
+
+    for (const bool compressed : {false, true}) {
+        SCOPED_TRACE(compressed);
+        const auto root = m_root / (compressed ? "compressed" : "uncompressed");
+        const auto install = root / "install";
+        const auto cache = root / "cache";
+        const auto payload = root / "payload";
+        std::filesystem::create_directories(install);
+        std::filesystem::create_directories(cache);
+        ASSERT_NO_FATAL_FAILURE(setCompression(install, compressed));
+        ASSERT_NO_FATAL_FAILURE(setCompression(cache, !compressed));
+        const std::string installDir = *io::fromStdPath(install);
+        const std::string payloadDir = *io::fromStdPath(payload);
+        const auto oldImage = makeHelperBinary("1.0.0", 0);
+        const auto newImage = makeHelperBinary("2.0.0", 0);
+        writeExecutable(mustJoin(installDir, kDefaultExecutableName), oldImage);
+        writeExecutable(mustJoin(payloadDir, kDefaultExecutableName), newImage);
+        writeFileWithParents(mustJoin(payloadDir, "data/resource.txt"), std::string(8192, 'x'));
+
+        SafeUpdateSpec spec;
+        spec.installDir = installDir;
+        spec.backupDir = *io::fromStdPath(cache / "backup");
+        spec.payloadPath = payloadDir;
+        spec.expectedRelease = makeReleaseForBytes(newImage, "2.0.0", 200);
+        spec.executableRelativePath = std::string(kDefaultExecutableName);
+        spec.keepBackupOnSuccess = true;
+        spec.launchDetachedAfterInstall = false;
+        const auto outcome = SafeUpdater(m_fs, m_launcher).applyUpdate(spec);
+        ASSERT_TRUE(outcome) << outcome.error().describe();
+        EXPECT_TRUE(outcome->applied);
+        EXPECT_TRUE(outcome->healthCheckPassed);
+        expectCompression(install, compressed);
+        expectCompression(install / kDefaultExecutableName, compressed);
+        expectCompression(install / "data", compressed);
+        expectCompression(install / "data/resource.txt", compressed);
+        expectCompression(cache / "backup", compressed);
+        expectCompression(cache, !compressed);
+    }
+}
+#endif
 
 TEST_F(SafeUpdaterTest, HealthyUpdateInstallsPassesSelftestAndStartsNewVersion) {
     const std::string installDir = *io::fromStdPath(m_root / "install");

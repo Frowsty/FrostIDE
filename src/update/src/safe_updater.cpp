@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Transactional update installation, health-check probing, and automatic rollback (FND-11).
+#include <frost/io/os_error.hpp>
 #include <frost/io/path.hpp>
 #include <frost/io/utf.hpp>
 #include <frost/update/safe_updater.hpp>
@@ -11,6 +12,8 @@
 
 #ifdef _WIN32
 #include <windows.h>
+
+#include <winioctl.h>
 #else
 #include <sys/stat.h>
 #endif
@@ -60,6 +63,51 @@ withOffscreenPlatform(std::vector<std::pair<std::string, std::optional<std::stri
 }
 
 #ifdef _WIN32
+Result<bool> directoryCompression(std::string_view path) {
+    auto wide = io::toWin32Path(path);
+    if (!wide)
+        return std::unexpected(wide.error());
+    const DWORD attributes = GetFileAttributesW(wide->c_str());
+    if (attributes == INVALID_FILE_ATTRIBUTES)
+        return std::unexpected(io::win32Error(GetLastError(), "read directory compression", path));
+    if ((attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) != FILE_ATTRIBUTE_DIRECTORY)
+        return fail(ErrorCode::InvalidArgument, "Update compression requires an ordinary directory");
+    return (attributes & FILE_ATTRIBUTE_COMPRESSED) != 0;
+}
+
+Result<void> setDirectoryCompression(std::string_view path, bool compressed) {
+    auto current = directoryCompression(path);
+    if (!current)
+        return std::unexpected(current.error());
+    if (*current == compressed)
+        return {};
+    auto wide = io::toWin32Path(path);
+    if (!wide)
+        return std::unexpected(wide.error());
+    HANDLE directory =
+        CreateFileW(wide->c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                    OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (directory == INVALID_HANDLE_VALUE)
+        return std::unexpected(io::win32Error(GetLastError(), "open update directory for compression", path));
+    FILE_ATTRIBUTE_TAG_INFO info{};
+    DWORD error = ERROR_SUCCESS;
+    if (!GetFileInformationByHandleEx(directory, FileAttributeTagInfo, &info, sizeof(info))) {
+        error = GetLastError();
+    } else if ((info.FileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) !=
+               FILE_ATTRIBUTE_DIRECTORY) {
+        error = ERROR_DIRECTORY;
+    } else {
+        USHORT format = compressed ? COMPRESSION_FORMAT_DEFAULT : COMPRESSION_FORMAT_NONE;
+        DWORD returned = 0;
+        if (!DeviceIoControl(directory, FSCTL_SET_COMPRESSION, &format, sizeof(format), nullptr, 0, &returned, nullptr))
+            error = GetLastError();
+    }
+    CloseHandle(directory);
+    if (error != ERROR_SUCCESS)
+        return std::unexpected(io::win32Error(error, "set update directory compression", path));
+    return {};
+}
+
 Result<std::string> locateWindowsPowerShell(io::IFileSystem& fs) {
     std::array<wchar_t, MAX_PATH> buffer{};
     const UINT length = GetSystemDirectoryW(buffer.data(), static_cast<UINT>(buffer.size()));
@@ -77,6 +125,18 @@ Result<std::string> locateWindowsPowerShell(io::IFileSystem& fs) {
     return *psPath;
 }
 #endif
+
+Result<void> createUpdateDirectory(io::IFileSystem& fs, std::string_view path, std::optional<bool> compressed) {
+    if (auto created = fs.createDirectories(path); !created)
+        return created;
+#ifdef _WIN32
+    if (compressed)
+        return setDirectoryCompression(path, *compressed);
+#else
+    (void)compressed;
+#endif
+    return {};
+}
 
 } // namespace
 
@@ -120,6 +180,14 @@ Result<void> SafeUpdater::moveOrCopyTree(std::string_view srcDir, std::string_vi
         return std::unexpected(removed.error());
     if (auto renamed = m_fs.rename(srcDir, dstDir); renamed)
         return {};
+#ifdef _WIN32
+    // Across volumes a new directory does not inherit the source root's policy.
+    auto compressed = directoryCompression(srcDir);
+    if (!compressed)
+        return std::unexpected(compressed.error());
+    if (auto created = createUpdateDirectory(m_fs, dstDir, *compressed); !created)
+        return created;
+#endif
     if (auto copied = copyDirectoryTree(srcDir, dstDir); !copied)
         return std::unexpected(copied.error());
     if (auto cleaned = m_fs.removeAll(srcDir); !cleaned)
@@ -129,8 +197,6 @@ Result<void> SafeUpdater::moveOrCopyTree(std::string_view srcDir, std::string_vi
 
 Result<void> SafeUpdater::extractZipArchive(std::string_view zipPath, std::string_view destDir,
                                             IClock::Duration timeout) const {
-    if (auto created = m_fs.createDirectories(destDir); !created)
-        return std::unexpected(created.error());
 #ifdef _WIN32
     auto powershell = locateWindowsPowerShell(m_fs);
     if (!powershell)
@@ -178,10 +244,11 @@ Result<void> SafeUpdater::extractZipArchive(std::string_view zipPath, std::strin
 #endif
 }
 
-Result<void> SafeUpdater::stagePayload(const SafeUpdateSpec& spec, std::string_view stageDir) const {
+Result<void> SafeUpdater::stagePayload(const SafeUpdateSpec& spec, std::string_view stageDir,
+                                       std::optional<bool> compressed) const {
     if (auto removed = m_fs.removeAll(stageDir); !removed && removed.error().code() != ErrorCode::NotFound)
         return std::unexpected(removed.error());
-    if (auto created = m_fs.createDirectories(stageDir); !created)
+    if (auto created = createUpdateDirectory(m_fs, stageDir, compressed); !created)
         return std::unexpected(created.error());
 
     auto st = m_fs.status(spec.payloadPath);
@@ -219,6 +286,10 @@ Result<void> SafeUpdater::stagePayload(const SafeUpdateSpec& spec, std::string_v
         const std::string rawExtractDir = std::string(stageDir) + ".extract";
         if (auto removed = m_fs.removeAll(rawExtractDir); !removed && removed.error().code() != ErrorCode::NotFound)
             return std::unexpected(removed.error());
+        if (auto created = createUpdateDirectory(m_fs, rawExtractDir, compressed); !created) {
+            (void)m_fs.removeAll(rawExtractDir);
+            return created;
+        }
         auto extracted = extractZipArchive(spec.payloadPath, rawExtractDir, spec.extractTimeout);
         if (!extracted) {
             (void)m_fs.removeAll(rawExtractDir);
@@ -279,8 +350,21 @@ Result<UpdateOutcome> SafeUpdater::applyUpdate(const SafeUpdateSpec& spec) const
     if (*normInstall == *normBackup)
         return fail(ErrorCode::InvalidArgument, "installDir and backupDir must be distinct directories");
 
+    std::optional<bool> compressed;
+#ifdef _WIN32
+    auto originalExists = m_fs.exists(*normInstall);
+    if (!originalExists)
+        return std::unexpected(originalExists.error());
+    if (*originalExists) {
+        auto previous = directoryCompression(*normInstall);
+        if (!previous)
+            return std::unexpected(previous.error());
+        compressed = *previous;
+    }
+#endif
+    // Apply the existing directory's policy before creating any payload entries.
     const std::string stageDir = *normBackup + ".stage";
-    if (auto staged = stagePayload(spec, stageDir); !staged) {
+    if (auto staged = stagePayload(spec, stageDir, compressed); !staged) {
         (void)m_fs.removeAll(stageDir);
         return std::unexpected(staged.error());
     }
@@ -292,6 +376,21 @@ Result<UpdateOutcome> SafeUpdater::applyUpdate(const SafeUpdateSpec& spec) const
         return std::unexpected(hadPreviousInstallResult.error());
     }
     const bool hadPreviousInstall = *hadPreviousInstallResult;
+#ifdef _WIN32
+    if (hadPreviousInstall != *originalExists) {
+        (void)m_fs.removeAll(stageDir);
+        return fail(ErrorCode::Busy, "Update installation appeared or disappeared while staging");
+    }
+    if (hadPreviousInstall) {
+        auto current = directoryCompression(*normInstall);
+        if (!current || *current != *compressed) {
+            (void)m_fs.removeAll(stageDir);
+            if (!current)
+                return std::unexpected(current.error());
+            return fail(ErrorCode::Busy, "Update installation compression changed while staging");
+        }
+    }
+#endif
     if (hadPreviousInstall) {
         if (auto backedUp = moveOrCopyTree(*normInstall, *normBackup); !backedUp) {
             (void)m_fs.removeAll(stageDir);
