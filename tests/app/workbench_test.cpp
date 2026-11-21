@@ -787,6 +787,19 @@ TEST(Workbench, SwitchingProjectsDuringBuildKeepsTheCurrentProjectAndTabs) {
     release = true;
     EXPECT_TRUE(waitFor([&] { return !rig.workbench->build().isBuilding(); }));
 }
+#else
+TEST(Workbench, ApproximateVisualStudioSolutionRefusesBuild) {
+    WorkDir dir("approximate-solution-build", "tiny_sln");
+    WorkbenchRig rig(dir);
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")));
+    ASSERT_NE(rig.workbench->solution(), nullptr);
+    ASSERT_TRUE(rig.workbench->solution()->approximate());
+    const auto result = rig.workbench->build().build(frost::build::BuildAction::Build);
+    ASSERT_FALSE(result);
+    EXPECT_EQ(result.error().code(), frost::ErrorCode::Unsupported);
+    EXPECT_FALSE(rig.workbench->build().isBuilding());
+}
 #endif
 
 TEST(Workbench, ProjectSwitcherOpensRecentIdentityAndKeepsCurrentOnMissingPath) {

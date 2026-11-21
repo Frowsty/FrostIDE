@@ -329,6 +329,15 @@ target_compile_definitions(app_workbench_cmake_tests PRIVATE ${_frost_workbench_
     FROST_TEST_C_COMPILER="${CMAKE_C_COMPILER}" FROST_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}"
     FROST_TEST_CMAKE="${CMAKE_COMMAND}")
 
+if(NOT WIN32)
+    frost_add_test(app_workbench_cmake_build_tests QT
+        SOURCES workbench_cmake_build_test.cpp
+        DEPS frost::app frost::build frost::io
+        LABELS integration cmake)
+    target_include_directories(app_workbench_cmake_build_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+    target_compile_definitions(app_workbench_cmake_build_tests PRIVATE ${_frost_workbench_definitions})
+endif()
+
 # Run configurations (RUN-2/RUN-3): the CMake executables of a real File API reply (oracle: the
 # reply JSON) and their edits reaching the built program, a native configuration run from the
 # toolbar whose Stop ends its run_tree_child tree (checked with OS process handles), and the trust

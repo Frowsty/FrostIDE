@@ -1190,6 +1190,7 @@ class BuildTreeLabelsTest(unittest.TestCase):
                                               "WorkbenchCreateUsage.", "WorkbenchCppModules.")),
                   "cmake": ("integration", ("CMakeRealBuild.", "WorkbenchCMake.", "WorkbenchClangdSpawn.",
                                             "CMakeCompileCommands.", "AutomationEndpoint.", "WorkbenchRun.",
+                                            "WorkbenchCMakeBuild.",
                                             "CMakePresetsOracle.", "Fixtures/CMakePresetsOracle.",
                                             "Fixtures/CMakePresetsRefusedOracle.", "TestRunnerCTest.",
                                             "TestRunnerCancel.", "TestRunnerStub.", "UnitTestsWindow.",
