@@ -791,16 +791,35 @@ TEST(WorkbenchProjectEdit, RemovesSourceFromBothSolutionFormatsWithoutSavingDirt
 }
 
 /*
- * SLN-6: a rename and a delete through the workbench update the .vcxproj and .vcxproj.filters
- * through the real ProjectHost: the rename changes only the Include attributes, the delete removes
- * the elements again (the project is byte-for-byte the fixture's), and MSBuild builds the result.
+ * ProjectHost previews the .vcxproj and .filters Include edits for the native rename transaction.
+ * Deletion commits through ProjectHost, and MSBuild builds the result.
  */
-TEST(WorkbenchProjectEdit, RenameAndDeleteUpdateTheProjectThroughProjectHost) {
+TEST(WorkbenchProjectEdit, PreviewedRenameAndDeletionSettleTheirOwnTransactions) {
     auto& fs = frost::io::realFileSystem();
     auto& launcher = frost::io::realProcessLauncher();
     auto found = frost::build::findMsBuild(launcher, fs);
     if (!found)
         GTEST_SKIP() << found.error().describe();
+    class HostCountingLauncher final : public frost::io::IProcessLauncher {
+    public:
+        frost::Result<std::unique_ptr<frost::io::IProcess>> launch(const frost::io::ProcessSpec& spec) override {
+            record(spec);
+            return frost::io::realProcessLauncher().launch(spec);
+        }
+        frost::Result<std::unique_ptr<frost::io::IAsyncProcess>>
+        launchAsync(const frost::io::ProcessSpec& spec, const frost::io::AsyncContext& context) override {
+            record(spec);
+            return frost::io::realProcessLauncher().launchAsync(spec, context);
+        }
+        std::atomic<unsigned> hostLaunches = 0;
+
+    private:
+        void record(const frost::io::ProcessSpec& spec) {
+            if (!m_host.empty() && frost::io::normalizePath(spec.executable).value_or("") == m_host)
+                ++hostLaunches;
+        }
+        const std::string m_host = frost::io::normalizePath(FROST_PROJECT_HOST).value_or("");
+    } recordingLauncher;
     WorkDir dir("rename edit", "tiny_sln");
     WorkDir privateData("rename edit state");
     const std::string fixtureProject = dir.read("App/App.vcxproj");
@@ -820,6 +839,7 @@ TEST(WorkbenchProjectEdit, RenameAndDeleteUpdateTheProjectThroughProjectHost) {
     options.workbench.msbuildPath = found->msbuildPath;
     options.workbench.projectEditHostPath = FROST_PROJECT_HOST;
     options.workbench.projectEditStateDirectory = privateData.join("project-edits");
+    options.launcher = &recordingLauncher;
     WorkbenchRig rig(dir, std::move(options));
     ASSERT_TRUE(rig.trust->trust(dir.path()));
     ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")));
@@ -838,7 +858,7 @@ TEST(WorkbenchProjectEdit, RenameAndDeleteUpdateTheProjectThroughProjectHost) {
         return !fs.exists(dir.join(".frost-project-edit-journal")).value_or(true) && markers && markers->empty();
     };
 
-    // Rename extra.cpp to "renamed å.cpp": only the two Include attributes change.
+    // ProjectHost provides the preview; the native atomic plan commits both Include attributes.
     auto notices = rig.window->notifications().log().size();
     auto renamed = rig.workbench->renameItem(dir.join("App/extra.cpp"), "renamed å.cpp");
     ASSERT_TRUE(renamed) << renamed.error().describe();
@@ -846,11 +866,14 @@ TEST(WorkbenchProjectEdit, RenameAndDeleteUpdateTheProjectThroughProjectHost) {
     expectedProject.replace(expectedProject.find("extra.cpp"), 9, "renamed å.cpp");
     std::string expectedFilters = filters;
     expectedFilters.replace(expectedFilters.find("extra.cpp"), 9, "renamed å.cpp");
-    ASSERT_TRUE(waitFor(
-        [&] { return (dir.read("App/App.vcxproj") != project && settled()) || !failures(notices).empty(); }, 120s));
     ASSERT_EQ(failures(notices), "");
     EXPECT_EQ(dir.read("App/App.vcxproj"), expectedProject);
     EXPECT_EQ(dir.read("App/App.vcxproj.filters"), expectedFilters);
+    EXPECT_FALSE(fs.exists(dir.join("App/extra.cpp")).value_or(true));
+    EXPECT_TRUE(fs.exists(dir.join("App/renamed å.cpp")).value_or(false));
+    EXPECT_TRUE(rig.workbench->canUndoRefactoring());
+    EXPECT_EQ(recordingLauncher.hostLaunches.load(), 1u);
+    EXPECT_FALSE(fs.exists(dir.join(".frost-project-edit-journal")).value_or(true));
     ASSERT_TRUE(waitFor(
         [&] { return rig.workbench->solution()->findFileNode(dir.join("App/renamed å.cpp")).has_value(); }, 60s));
 
@@ -861,6 +884,8 @@ TEST(WorkbenchProjectEdit, RenameAndDeleteUpdateTheProjectThroughProjectHost) {
         [&] { return (dir.read("App/App.vcxproj") != expectedProject && settled()) || !failures(notices).empty(); },
         120s));
     ASSERT_EQ(failures(notices), "");
+    EXPECT_EQ(recordingLauncher.hostLaunches.load(), 2u);
+    EXPECT_FALSE(fs.exists(dir.join("App/renamed å.cpp")).value_or(true));
     EXPECT_EQ(dir.read("App/App.vcxproj"), fixtureProject);
     EXPECT_EQ(dir.read("App/App.vcxproj.filters"),
               "<Project xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\">\r\n"
