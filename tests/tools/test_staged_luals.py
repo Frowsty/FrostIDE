@@ -215,6 +215,10 @@ class StagedLuaLanguageServerTest(TempDirTestCase):
     def test_a_staged_build_starts_the_pinned_luals_and_shows_its_diagnostic(self) -> None:
         pinned = self.pinned_member()
         self.stage_build()
+        if not WINDOWS:
+            relocated = self.tmp / 'relocated package with spaces'
+            self.stage.rename(relocated)
+            self.stage = relocated
         staged_exe = self.stage / f"luals-{LOCK['version']}" / "bin" / LUALS_EXE
         self.assertTrue(staged_exe.is_file(), f"the stage has no {staged_exe}")
         self.assertEqual(sha256_bytes(staged_exe.read_bytes()), sha256_bytes(pinned),
@@ -223,10 +227,6 @@ class StagedLuaLanguageServerTest(TempDirTestCase):
                                  timeout=120, check=False)
         self.assertIn(LOCK["version"], version.stdout + version.stderr, "the staged LuaLS's own --version")
 
-        if not WINDOWS:
-            relocated = self.tmp / 'relocated package with spaces'
-            self.stage.rename(relocated)
-            self.stage = relocated
         profile, spawn_log, project = self.tmp / "profile", self.tmp / "spawn-log", self.tmp / "project"
         project.mkdir()
         source = project / "main.lua"

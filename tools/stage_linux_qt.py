@@ -21,16 +21,21 @@ def stage_qt(repo, sdk, destination, archive=None, debug=False, check_only=False
         if hashlib.sha256(archive.read_bytes()).hexdigest() != pin['sources']['qtbase']['sha256']:
             raise ValueError('Qt source archive does not match sdk.lock')
     icu = [path for path in libraries if path.name.startswith('libicu')]
+    notice_pin = pin['linux']['icuNotice']
+    cached_notice = sdk / '_downloads' / notice_pin['file']
+    if icu_notice is None and icu and cached_notice.exists():
+        icu_notice = cached_notice
     if icu_notice is not None:
         notice_bytes = icu_notice.read_bytes()
-        if hashlib.sha256(notice_bytes).hexdigest() != pin['linux']['icuNotice']['sha256']:
+        if hashlib.sha256(notice_bytes).hexdigest() != notice_pin['sha256']:
             raise ValueError('ICU notice does not match sdk.lock')
     else:
         installed_notice = next((path for path in (root / 'licenses/ICU.txt', root / 'licenses/icu-LICENSE',
             root / 'doc/icu/LICENSE') if path.is_file()), None)
         notice_bytes = installed_notice.read_bytes() if installed_notice is not None else None
     if icu and notice_bytes is None:
-        raise ValueError('bundled ICU requires the pinned --icu-notice or the SDK upstream notice')
+        raise ValueError('bundled ICU requires the pinned --icu-notice or an SDK notice '
+                         '(tools/bootstrap-wsl.sh --only icu-notice)')
     for path in libraries + [root / 'plugins' / name for name in plugins]:
         if not path.resolve().is_relative_to(root.resolve()): raise ValueError('Qt input escapes SDK Qt root')
     if check_only: return

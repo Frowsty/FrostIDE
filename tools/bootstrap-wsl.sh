@@ -18,6 +18,8 @@
 #       otherwise (ADR 0049). FROST_SKIP_LLDB=1 skips that last step.
 #   one component:         wsl -d Ubuntu-24.04 -- bash tools/bootstrap-wsl.sh --only luals
 #       installs (or confirms) just that archive component of the lock file.
+#   ICU notice only:       wsl -d Ubuntu-24.04 -- bash tools/bootstrap-wsl.sh --only icu-notice
+#       prepares the pinned ICU notice for an existing SDK without reinstalling Qt.
 #
 # Archives are taken from the Windows download cache (/mnt/e/sdk/_downloads)
 # when present, otherwise downloaded. Every archive, Qt's included, is checked
@@ -75,13 +77,13 @@ system_phase() {
 # Copies or downloads one archive from the lock file into $SDK/_downloads and
 # verifies its pinned digest; prints the local path.
 fetch_archive() {
-    local name="$1" file url sha
-    file="$(lock_get "linux.$name.file")"
-    url="$(lock_get "linux.$name.url")"
-    if [[ "$name" == dotnet ]]; then
-        sha="$(lock_get "linux.$name.sha512")"
+    local key="$1" file url sha
+    file="$(lock_get "$key.file")"
+    url="$(lock_get "$key.url")"
+    if [[ "$key" == linux.dotnet ]]; then
+        sha="$(lock_get "$key.sha512")"
     else
-        sha="$(lock_get "linux.$name.sha256")"
+        sha="$(lock_get "$key.sha256")"
     fi
     mkdir -p "$SDK/_downloads"
     local dest="$SDK/_downloads/$file"
@@ -94,7 +96,7 @@ fetch_archive() {
         mv "$dest.part" "$dest"
     fi
     local actual
-    if [[ "$name" == dotnet ]]; then actual="$(sha512sum "$dest" | cut -d' ' -f1)";
+    if [[ "$key" == linux.dotnet ]]; then actual="$(sha512sum "$dest" | cut -d' ' -f1)";
     else actual="$(sha256sum "$dest" | cut -d' ' -f1)"; fi
     if [[ "$actual" != "$sha" ]]; then
         rm -f "$dest"
@@ -115,7 +117,7 @@ install_archive() {
         echo "[$name] $version already installed"
         return
     fi
-    archive="$(fetch_archive "$name")"
+    archive="$(fetch_archive "linux.$name")"
     staging="$SDK/_staging/$name"
     rm -rf "$staging" && mkdir -p "$staging"
     echo "[$name] extracting $version"
@@ -166,6 +168,7 @@ install_managed() {
 # Installs the pinned Qt subset for Linux with tools/qt-fetch.py, which reads
 # the repository, archives and hashes from the lock file and extracts with bsdtar.
 install_qt() {
+    fetch_archive qt.linux.icuNotice
     python3 -I "$REPO_ROOT/tools/qt-fetch.py" --lock "$LOCK" --platform linux \
         --dest "$SDK/qt" --cache "$SDK/_downloads/qt"
 }
@@ -254,7 +257,12 @@ if [[ "${1:-}" == "--system" ]]; then
 fi
 if [[ "${1:-}" == "--only" ]]; then
     mkdir -p "$SDK"
-    install_archive "${2:?--only needs an archive component of the lock file, e.g. luals}"
+    component="${2:?--only needs a component of the lock file, e.g. luals or icu-notice}"
+    if [[ "$component" == icu-notice ]]; then
+        fetch_archive qt.linux.icuNotice
+    else
+        install_archive "$component"
+    fi
     exit 0
 fi
 

@@ -188,6 +188,19 @@ class StageShTest(TempDirTestCase):
         self.assertFalse((qt / "licenses").exists())
         self.assertEqual(notice.read_bytes(), notice_bytes)
 
+        cached = sdk / "_downloads" / fixture_pin["qt"]["linux"]["icuNotice"]["file"]
+        cached.parent.mkdir(exist_ok=True)
+        cached.write_bytes(b"incorrect cached notice")
+        cached_stage = self.tmp / "cached-stage"
+        with self.assertRaisesRegex(ValueError, "ICU notice does not match sdk.lock"):
+            stage_qt(repository, sdk, cached_stage, debug=True, check_only=True)
+        self.assertFalse(cached_stage.exists())
+        cached.write_bytes(notice_bytes)
+        cached_stage.mkdir()
+        self._executable(cached_stage / "frost", b"FrostIDE executable fixture")
+        stage_qt(repository, sdk, cached_stage, debug=True)
+        self.assertEqual((cached_stage / "licenses/ICU.txt").read_bytes(), notice_bytes)
+
     def test_a_missing_bundled_tool_fails_before_staging(self) -> None:
         cases = {"clang-scan-deps": f"{LLVM}/bin/clang-scan-deps", "LLVM coverage tool": f"{LLVM}/bin/llvm-cov", "clangd": f"{LLVM}/bin/clangd", "clangd resource directory": f"{LLVM}/lib/clang",
                  "lldb-dap file": f"{LLDB}/bin/lldb-dap"}

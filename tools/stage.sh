@@ -26,7 +26,7 @@
 # Qt is copied into qt/lib and qt/plugins. The frost wrapper resolves the relocated package,
 # supplies its library/plugin paths and executes frost.bin. Release packaging requires the
 # source-pinned --qt-source archive; Debug fixture stages may omit that archive.
-# If the Qt SDK lacks its ICU notice, pass the pinned upstream file as --icu-notice.
+# Linux bootstrap caches the pinned ICU notice. Use --icu-notice to select an explicit copy.
 # Release stages split debug sections from FrostIDE ELF images into <dest>-symbols.zip.
 ## Exit status: 0 staged, 1 a check failed (nothing partial is left), 2 usage. Linux only; bash 4+,
 # coreutils, python3 (reads the lock), cmp and ldd.
