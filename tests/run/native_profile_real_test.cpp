@@ -55,7 +55,8 @@ TEST(NativeProfileReal, ActualOsSampleReportIdentifiesTheFixtureHotFunction) {
     request.xperf = *xperf;
 #else
     request.backend = NativeProfileBackend::Perf;
-    request.perf = "/usr/bin/perf";
+    request.perf = test::environmentValue("FROST_TEST_PERF").value_or("/usr/bin/perf");
+    ASSERT_TRUE(io::isAbsolutePath(request.perf)) << "FROST_TEST_PERF must name an absolute local executable";
 #endif
     auto report = collectNativeProfile(fs, io::realProcessLauncher(), request);
     ASSERT_TRUE(report) << report.error().describe();
