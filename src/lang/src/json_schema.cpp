@@ -109,7 +109,7 @@ struct Scanner {
         const auto decoded = rpc::parseJson(raw);
         return {decoded && decoded->isString() ? *decoded->asString() : std::string(raw.substr(1)), {start, at}};
     }
-    void value(std::vector<std::string> path = {}, unsigned depth = 0, std::size_t keyBegin = 0,
+    void value(const std::vector<std::string>& path = {}, unsigned depth = 0, std::size_t keyBegin = 0,
                std::size_t keyEnd = 0) {
         space();
         if (depth > 128 || nodes.size() >= 100000)
@@ -135,10 +135,10 @@ struct Scanner {
                         break;
                     }
                     ++at;
-                    value(std::move(child), depth + 1, key.second.first, key.second.second);
+                    value(child, depth + 1, key.second.first, key.second.second);
                 } else {
                     child.push_back(std::to_string(element++));
-                    value(std::move(child), depth + 1);
+                    value(child, depth + 1);
                 }
                 space();
                 if (at <= previous || at >= source.size() || source[at] != ',')
@@ -408,7 +408,7 @@ std::optional<Json> tableReference(const text::Snapshot& snapshot) {
         }
     return {};
 }
-void markDataDeclaration(Json& shape, const std::string& source, std::vector<std::string> path) {
+void markDataDeclaration(Json& shape, const std::string& source, const std::vector<std::string>& path) {
     auto names = Json::array();
     for (const auto& name : path)
         names.push(name);
@@ -417,7 +417,7 @@ void markDataDeclaration(Json& shape, const std::string& source, std::vector<std
         for (const auto& key : properties->keys()) {
             auto child = path;
             child.push_back(key);
-            markDataDeclaration(*properties->find(key), source, std::move(child));
+            markDataDeclaration(*properties->find(key), source, child);
         }
     if (auto* items = shape.find("items"))
         markDataDeclaration(*items, source, path);
@@ -607,7 +607,7 @@ bool admissibleEngineShape(const Json& schema, unsigned depth, std::size_t& node
         return false;
     return true;
 }
-void validate(const Json& schema, const Json& value, std::vector<std::string> path,
+void validate(const Json& schema, const Json& value, const std::vector<std::string>& path,
               std::vector<std::pair<std::vector<std::string>, std::string>>& errors, unsigned depth = 0) {
     if (depth > 128 || errors.size() >= kSnapshotValidationMaxIssues)
         return;
@@ -642,14 +642,14 @@ void validate(const Json& schema, const Json& value, std::vector<std::string> pa
                 if (const auto* childSchema = properties->find(value.keys()[i])) {
                     auto child = path;
                     child.push_back(value.keys()[i]);
-                    validate(*childSchema, value.items()[i], std::move(child), errors, depth + 1);
+                    validate(*childSchema, value.items()[i], child, errors, depth + 1);
                 }
     } else if (value.isArray()) {
         if (const auto* items = schema.find("items"))
             for (std::size_t i = 0; i < value.size(); ++i) {
                 auto child = path;
                 child.push_back(std::to_string(i));
-                validate(*items, value.items()[i], std::move(child), errors, depth + 1);
+                validate(*items, value.items()[i], child, errors, depth + 1);
             }
     }
 }
