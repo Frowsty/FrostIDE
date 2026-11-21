@@ -110,25 +110,72 @@ TEST(SolutionTreeModel, ColoursFileNamesFromTheProvider) {
     EXPECT_FALSE(header.data(Qt::ForegroundRole).isValid()); // No provider: the default colour.
 
     // The VCS colours (M5): one colour for lib.h, none for the rest; projects are never coloured.
-    int changed = 0;
+    std::vector<std::pair<QModelIndex, QModelIndex>> changed;
     QObject::connect(&model, &QAbstractItemModel::dataChanged,
-                     [&changed](const QModelIndex&, const QModelIndex&, const QList<int>& roles) {
-                         changed += roles.contains(Qt::ForegroundRole) ? 1 : 0;
+                     [&changed](const QModelIndex& first, const QModelIndex& last, const QList<int>& roles) {
+                         if (roles.contains(Qt::ForegroundRole))
+                             changed.emplace_back(first, last);
                      });
     const std::string headerPath = tiny("Lib/lib.h");
-    model.setFileColorProvider([headerPath](std::string_view path) -> std::optional<QColor> {
-        return path == headerPath ? std::optional<QColor>(QColor(0x6F, 0xBF, 0x73)) : std::nullopt;
+    QColor headerColor(0x6F, 0xBF, 0x73);
+    const std::vector<std::pair<QModelIndex, QModelIndex>> headerOnly{{header, header}};
+    model.setFileColorProvider({});
+    model.refreshFileColors();
+    EXPECT_TRUE(changed.empty());
+    model.setFileColorProvider([&](std::string_view path) -> std::optional<QColor> {
+        return path == headerPath ? std::optional(headerColor) : std::nullopt;
     });
-    EXPECT_GT(changed, 0);
-    EXPECT_EQ(header.data(Qt::ForegroundRole).value<QColor>(), QColor(0x6F, 0xBF, 0x73));
+    EXPECT_EQ(changed, headerOnly);
+    EXPECT_EQ(header.data(Qt::ForegroundRole).value<QColor>(), headerColor);
     EXPECT_FALSE(source.data(Qt::ForegroundRole).isValid());
     EXPECT_FALSE(header.parent().data(Qt::ForegroundRole).isValid());
 
-    changed = 0;
+    changed.clear();
     model.refreshFileColors();
-    EXPECT_GT(changed, 0);
+    EXPECT_TRUE(changed.empty());
+    headerColor = QColor(0xD9, 0x77, 0x24);
+    model.refreshFileColors();
+    EXPECT_EQ(changed, headerOnly);
+    EXPECT_EQ(header.data(Qt::ForegroundRole).value<QColor>(), headerColor);
+    changed.clear();
     model.setFileColorProvider({});
+    EXPECT_EQ(changed, headerOnly);
     EXPECT_FALSE(header.data(Qt::ForegroundRole).isValid());
+}
+
+TEST(SolutionTreeModel, ColourUpdatesReachFilteredRowsAndSurviveSolutionReset) {
+    SolutionTreeModel model;
+    model.setSolution(loadTiny("Tiny.sln"));
+    SolutionFilterModel proxy;
+    proxy.setSourceModel(&model);
+    proxy.setQuery(QStringLiteral("lib.h"));
+    const auto headerPath = tiny("Lib/lib.h");
+    QColor color(0x6F, 0xBF, 0x73);
+    int changed = 0;
+    QObject::connect(&proxy, &QAbstractItemModel::dataChanged,
+                     [&](const QModelIndex& first, const QModelIndex& last, const QList<int>& roles) {
+                         if (roles.contains(Qt::ForegroundRole)) {
+                             ++changed;
+                             EXPECT_EQ(first, last);
+                             EXPECT_EQ(first.data(SolutionTreeModel::PathRole).toString().toStdString(), headerPath);
+                         }
+                     });
+    const auto header = [&] { return proxy.mapFromSource(model.indexOfPath(headerPath)); };
+    ASSERT_TRUE(header().isValid());
+    EXPECT_FALSE(proxy.mapFromSource(model.indexOfPath(tiny("Lib/lib.cpp"))).isValid());
+    model.setFileColorProvider([&](std::string_view path) -> std::optional<QColor> {
+        return path == headerPath ? std::optional(color) : std::nullopt;
+    });
+    EXPECT_EQ(changed, 1);
+    EXPECT_EQ(header().data(Qt::ForegroundRole).value<QColor>(), color);
+
+    model.setSolution(loadTiny("Tiny.slnx"));
+    ASSERT_TRUE(header().isValid());
+    EXPECT_EQ(header().data(Qt::ForegroundRole).value<QColor>(), color);
+    model.setFileColorProvider({});
+    EXPECT_EQ(changed, 2);
+    EXPECT_FALSE(header().data(Qt::ForegroundRole).isValid());
+    EXPECT_EQ(proxy.query(), QStringLiteral("lib.h"));
 }
 
 TEST(SolutionTreeModel, ShowsFoldersFiltersAndLoadErrorsOfTheSdkSolution) {

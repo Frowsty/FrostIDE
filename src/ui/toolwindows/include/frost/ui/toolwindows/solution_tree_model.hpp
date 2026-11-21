@@ -36,6 +36,7 @@
 #include <QStyledItemDelegate>
 
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string_view>
@@ -86,9 +87,9 @@ public:
 
     // The colour of a file's name (nullopt: the default text colour), queried in data().
     using FileColorProvider = std::function<std::optional<QColor>(std::string_view absolutePath)>;
-    // Sets (or clears, with an empty function) the file colours and repaints. O(nodes).
+    // Sets (or clears, with an empty function) the file colours and announces changed rows.
     void setFileColorProvider(FileColorProvider provider);
-    // Tells the views that every file colour may have changed (dataChanged for Qt::ForegroundRole). O(nodes).
+    // Samples the provider and publishes ForegroundRole only for changed rows.
     void refreshFileColors();
 
     [[nodiscard]] QModelIndex index(int row, int column, const QModelIndex& parent = {}) const override;
@@ -113,10 +114,15 @@ signals:
     void projectDroppedOnSolutionFolder(const QString& projectPath, const QString& targetFolderId);
 
 private:
+    using FileColors = std::map<project::NodeId, QColor>;
+    [[nodiscard]] FileColors sampleFileColors() const;
+
     std::shared_ptr<const project::SolutionModel> m_solution;
     std::vector<int> m_rowInParent; // By NodeId: the node's row among its parent's children.
     std::unique_ptr<detail::IconCache> m_icons;
     FileColorProvider m_fileColors;
+    std::vector<project::NodeId> m_fileNodes;
+    FileColors m_reportedFileColors;
 };
 
 /*

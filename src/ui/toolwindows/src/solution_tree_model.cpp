@@ -23,6 +23,7 @@
 #include <cctype>
 #include <ranges>
 #include <string>
+#include <tuple>
 
 namespace frost::ui {
 namespace {
@@ -149,14 +150,20 @@ void SolutionTreeModel::setSolution(std::shared_ptr<const project::SolutionModel
     beginResetModel();
     m_solution = std::move(solution);
     m_rowInParent.assign(m_solution ? m_solution->nodeCount() : 0, 0);
+    m_fileNodes.clear();
     if (m_solution) {
         for (std::size_t i = 0; i < m_solution->nodeCount(); ++i) {
-            const auto children = m_solution->children(NodeId{static_cast<std::uint32_t>(i)});
+            const NodeId id{static_cast<std::uint32_t>(i)};
+            const auto& node = m_solution->node(id);
+            if (node.kind == NodeKind::File && !node.path.empty())
+                m_fileNodes.push_back(id);
+            const auto children = m_solution->children(id);
             for (std::size_t row = 0; row < children.size(); ++row) {
                 m_rowInParent[children[row].value()] = static_cast<int>(row);
             }
         }
     }
+    m_reportedFileColors = sampleFileColors();
     endResetModel();
 }
 
@@ -500,6 +507,8 @@ bool SolutionTreeModel::dropMimeData(const QMimeData* data, Qt::DropAction actio
 
 SolutionFilterModel::SolutionFilterModel(QObject* parent) : QSortFilterProxyModel(parent) {
     setRecursiveFilteringEnabled(true);
+    // Display names change on model reset. Foreground-only updates must not recursively refilter the tree.
+    setDynamicSortFilter(false);
 }
 
 void SolutionFilterModel::setQuery(const QString& query) {
@@ -524,19 +533,46 @@ void SolutionTreeModel::setFileColorProvider(FileColorProvider provider) {
     refreshFileColors();
 }
 
+SolutionTreeModel::FileColors SolutionTreeModel::sampleFileColors() const {
+    FileColors colors;
+    if (m_fileColors)
+        for (const NodeId id : m_fileNodes)
+            if (const auto color = m_fileColors(m_solution->node(id).path))
+                colors.emplace_hint(colors.end(), id, *color);
+    return colors;
+}
+
 void SolutionTreeModel::refreshFileColors() {
-    std::vector<QModelIndex> parents{QModelIndex()};
-    while (!parents.empty()) {
-        const QModelIndex parent = parents.back();
-        parents.pop_back();
-        const int rows = rowCount(parent);
-        if (rows == 0) {
-            continue;
-        }
-        emit dataChanged(index(0, 0, parent), index(rows - 1, 0, parent), {Qt::ForegroundRole});
-        for (int row = 0; row < rows; ++row) {
-            parents.push_back(index(row, 0, parent));
-        }
+    auto colors = sampleFileColors();
+    struct ChangedRow {
+        NodeId parent;
+        int row;
+    };
+    std::vector<ChangedRow> changed;
+    const auto mark = [&](NodeId id) {
+        if (const auto parent = m_solution->parent(id))
+            changed.push_back({*parent, m_rowInParent[id.value()]});
+    };
+    for (const auto& [id, color] : m_reportedFileColors)
+        if (!colors.contains(id))
+            mark(id);
+    for (const auto& [id, color] : colors) {
+        const auto old = m_reportedFileColors.find(id);
+        if (old == m_reportedFileColors.end() || old->second != color)
+            mark(id);
+    }
+    m_reportedFileColors = std::move(colors);
+
+    std::ranges::sort(changed, {}, [](const ChangedRow& row) { return std::tie(row.parent, row.row); });
+    for (std::size_t first = 0; first < changed.size();) {
+        std::size_t last = first;
+        while (last + 1 < changed.size() && changed[last + 1].parent == changed[first].parent &&
+               changed[last + 1].row == changed[last].row + 1)
+            ++last;
+        const auto parent = indexOf(changed[first].parent);
+        emit dataChanged(index(changed[first].row, 0, parent), index(changed[last].row, 0, parent),
+                         {Qt::ForegroundRole});
+        first = last + 1;
     }
 }
 
