@@ -170,18 +170,19 @@ enum class SkipReason : std::uint8_t {
 };
 
 struct SkippedDocument {
-    FileDocument* document = nullptr;
+    std::string path;
     SkipReason reason = SkipReason::Untitled;
 };
 
 struct FailedSave {
-    FileDocument* document = nullptr;
+    std::string path;
     Error error{ErrorCode::Unknown};
 };
 
-// The result of saveAll(): every dirty document is in exactly one list.
+// The result of saveAll(): every dirty document is in exactly one list. Value paths remain valid
+// when a completion notification closes a document or replaces the project.
 struct SaveAllResult {
-    std::vector<FileDocument*> saved;
+    std::vector<std::string> saved;
     std::vector<SkippedDocument> skipped;
     std::vector<FailedSave> failed;
     std::vector<FailedSave> warnings; // Saved, with a warning requiring user attention.
@@ -274,8 +275,8 @@ public:
      * All) of the then clean document still runs the transform and writes only if it changes the
      * text, so what the autosave spared is trimmed then. Not run while an IME composition is
      * active. If the write fails after the edits were applied, they stay in the still dirty buffer
-     * as an undoable step. Empty removes it. Owner thread; the provider must not save or close
-     * documents.
+     * as an undoable step. Empty removes it. Owner thread; nested saves and document closes
+     * return Busy while the provider is active.
      */
     void setSaveTransform(std::function<SaveTransform(const FileDocument&, SaveReason)> provider) {
         m_saveTransform = std::move(provider);
@@ -319,6 +320,8 @@ public:
     SaveAllResult saveAll(SaveReason reason = SaveReason::SaveAll);
     // Whether saveAll() would pass `document` over, and why. O(1).
     [[nodiscard]] std::optional<SkipReason> skipReason(const FileDocument& document, SaveReason reason) const noexcept;
+    // True while a save owns document state, including any synchronous callbacks.
+    [[nodiscard]] bool saving() const noexcept { return m_saving; }
     // Whether any document is dirty. O(documents).
     [[nodiscard]] bool anyDirty() const noexcept;
 
@@ -448,6 +451,7 @@ private:
     std::int64_t m_nextGeneration = 0;
     std::uint64_t m_nextUntitled = 0;
     std::optional<IClock::SteadyTime> m_lastPrune;
+    bool m_saving = false;
 };
 
 } // namespace frost::document

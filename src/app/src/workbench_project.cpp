@@ -643,6 +643,11 @@ void Workbench::setProject(std::string root, QString name, std::string recentPat
 }
 
 bool Workbench::closeForOpen() {
+    if (m_documents->saving()) {
+        notify(text("The project stays open"), text("Wait for the document save to finish."),
+               ui::NotificationKind::Warning);
+        return false;
+    }
     if (m_solutionLoading) {
         m_solutionLoadStop.request_stop();
         return false; // Do not replace/close the current project while the modal worker owns its inputs.

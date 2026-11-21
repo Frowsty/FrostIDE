@@ -429,26 +429,26 @@ void Workbench::overwriteDisk(const std::string& path) {
 }
 
 void Workbench::reportSaveAll(const document::SaveAllResult& result, bool quiet) {
-    for (document::FileDocument* document : result.saved) {
-        m_services.editors.refreshBanners(document->path());
-        m_services.documents.notifyChanged(document->path());
+    for (const std::string& path : result.saved) {
+        m_services.editors.refreshBanners(path);
+        m_services.documents.notifyChanged(path);
     }
     if (!result.saved.empty() && m_todoList != nullptr &&
         (m_shell.toolWindows().isVisible(kTodoToolWindow) || m_todoList->isVisible())) {
         refreshTodoItems();
     }
     for (const document::FailedSave& failed : result.failed) {
-        notifyError(text("Cannot save %1").arg(nativePath(failed.document->path())), failed.error);
+        notifyError(text("Cannot save %1").arg(nativePath(failed.path)), failed.error);
     }
     for (const document::FailedSave& warning : result.warnings) {
-        notifySaveWarning(warning.document->path(), warning.error);
+        notifySaveWarning(warning.path, warning.error);
     }
     if (quiet) {
         return;
     }
     for (const document::SkippedDocument& skipped : result.skipped) {
-        const std::string path = skipped.document->path();
-        const QString name = skipped.document->untitled() ? text("An untitled buffer") : nativePath(path);
+        const std::string path = skipped.path;
+        const QString name = skipped.reason == document::SkipReason::Untitled ? text("An untitled buffer") : nativePath(path);
         switch (skipped.reason) {
         case document::SkipReason::MergePending: {
             Notification notification;

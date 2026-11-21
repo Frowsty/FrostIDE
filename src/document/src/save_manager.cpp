@@ -183,6 +183,8 @@ FileDocument* SaveManager::find(std::string_view path) const {
 }
 
 Result<void> SaveManager::close(FileDocument& document) {
+    if (saving())
+        return fail(ErrorCode::Busy, "a document save is in progress");
     if (m_refactoringPending.assigned() || document.document().undoState().externallyLocked)
         return fail(ErrorCode::Busy, "a refactoring transaction owns this document");
     Result<void> result;
@@ -237,6 +239,8 @@ Result<SaveOutcome> SaveManager::saveAs(FileDocument& document, std::string_view
 }
 
 Result<void> SaveManager::renameDocument(FileDocument& document, std::string_view newPath) {
+    if (saving())
+        return fail(ErrorCode::Busy, "a document save is in progress");
     if (m_refactoringPending.assigned() || document.document().undoState().externallyLocked)
         return fail(ErrorCode::Busy, "a refactoring transaction owns this document");
     auto normalized = normalize(newPath);
@@ -267,6 +271,13 @@ Result<void> SaveManager::renameDocument(FileDocument& document, std::string_vie
 
 Result<SaveOutcome> SaveManager::saveTo(FileDocument& document, const std::string& path, const SaveOptions& options,
                                         bool saveAs) {
+    if (saving())
+        return fail(ErrorCode::Busy, "a document save is in progress");
+    m_saving = true;
+    struct SavingScope {
+        bool& saving;
+        ~SavingScope() { saving = false; }
+    } savingScope{m_saving};
     if (m_refactoringPending.assigned() || document.document().undoState().externallyLocked)
         return fail(ErrorCode::Busy, "a refactoring transaction owns this document");
     const auto context = [&](Error error) {
@@ -450,9 +461,13 @@ std::optional<SkipReason> SaveManager::skipReason(const FileDocument& document, 
 
 SaveAllResult SaveManager::saveAll(SaveReason reason) {
     SaveAllResult result;
-    // Saving never adds or removes documents, so the list is stable.
-    for (const auto& owned : m_documents) {
-        FileDocument& document = *owned;
+    // A callback can open another document, but cannot close any while saveTo is active.
+    std::vector<FileDocument*> pending;
+    pending.reserve(m_documents.size());
+    for (const auto& owned : m_documents)
+        pending.push_back(owned.get());
+    for (FileDocument* file : pending) {
+        FileDocument& document = *file;
         // A clean document is saved only for a deleted file, or for the save actions an autosave left
         // to an explicit Save All (saveTo writes it only when they change the text).
         const bool pendingTransform =
@@ -466,7 +481,7 @@ SaveAllResult SaveManager::saveAll(SaveReason reason) {
         if (const auto skip = skipReason(document, reason)) {
             if (pendingTransform && !document.dirty())
                 continue; // Nothing unsaved to report: only the save actions could not run.
-            result.skipped.push_back(SkippedDocument{&document, *skip});
+            result.skipped.push_back(SkippedDocument{document.path(), *skip});
             continue;
         }
         SaveOptions options;
@@ -474,11 +489,11 @@ SaveAllResult SaveManager::saveAll(SaveReason reason) {
         if (auto saved = save(document, options); saved) {
             if (!saved->written && !document.dirty())
                 continue; // A pending-transform check that found nothing to change.
-            result.saved.push_back(&document);
+            result.saved.push_back(document.path());
             for (auto& warning : saved->warnings)
-                result.warnings.push_back(FailedSave{&document, std::move(warning)});
+                result.warnings.push_back(FailedSave{document.path(), std::move(warning)});
         } else {
-            result.failed.push_back(FailedSave{&document, std::move(saved.error())});
+            result.failed.push_back(FailedSave{document.path(), std::move(saved.error())});
         }
     }
     return result;

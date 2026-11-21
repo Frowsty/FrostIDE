@@ -447,6 +447,8 @@ void Workbench::editorTextChanged(DocumentEditorView& view, const text::ChangeSe
 }
 
 bool Workbench::editorCloseRequested(DocumentEditorView& view) {
+    if (m_documents->saving())
+        return false;
     if (std::ranges::contains(m_discarded, view.path()))
         return true;
     if (m_documentRegistry->viewCount(view.path()) > 1)
@@ -830,11 +832,11 @@ document::SaveAllResult Workbench::saveAllDocuments() {
         return m_nav->saveAll();
     }
     document::SaveAllResult result = m_documents->saveAll(document::SaveReason::SaveAll);
-    for (document::FileDocument* document : result.saved) {
-        m_documentRegistry->notifyChanged(document->path());
+    for (const std::string& path : result.saved) {
+        m_documentRegistry->notifyChanged(path);
     }
     for (const document::FailedSave& warning : result.warnings) {
-        notify(text("Saved %1 with a warning").arg(displayName(warning.document->path())), qs(warning.error.describe()),
+        notify(text("Saved %1 with a warning").arg(displayName(warning.path)), qs(warning.error.describe()),
                ui::NotificationKind::Warning);
     }
     return result;

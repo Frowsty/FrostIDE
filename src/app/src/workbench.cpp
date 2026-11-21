@@ -1019,12 +1019,12 @@ void Workbench::shutdown() {
     // Rider saves on exit; what cannot be saved stays in the hot-exit journal.
     if (m_documents->policies().autosave.onFrameDeactivation) {
         const document::SaveAllResult saved = m_documents->saveAll(document::SaveReason::Autosave);
-        for (document::FileDocument* document : saved.saved) {
-            m_documentRegistry->notifyChanged(document->path());
+        for (const std::string& path : saved.saved) {
+            m_documentRegistry->notifyChanged(path);
         }
         for (const document::FailedSave& warning : saved.warnings) {
-            log::warn(kLog, "after saving {} during shutdown: {}", warning.document->path(), warning.error.describe());
-            notify(text("Saved %1 with a warning").arg(qs(warning.document->path())), qs(warning.error.describe()),
+            log::warn(kLog, "after saving {} during shutdown: {}", warning.path, warning.error.describe());
+            notify(text("Saved %1 with a warning").arg(qs(warning.path)), qs(warning.error.describe()),
                    ui::NotificationKind::Warning);
         }
     }

@@ -95,6 +95,7 @@ TEST(WorkbenchDxc, ShellDestructionDuringNestedCompilerPickerNeverDeletesStackMo
 TEST(WorkbenchDxc, ProjectReplacementDuringSaveAllRefusesBeforeLaunchingOldProfile) {
     WorkDir dir("dxc-save-switch");
     dir.write("project/test.hlsl", "float4 main():SV_Target{return 0;}\n");
+    dir.write("project/notes.txt", "notes\n");
     dir.write("other/marker.txt", "other");
     dir.write("installed/dxc.exe", "never executed");
     frost::io::ScriptedProcessLauncher launcher;
@@ -109,14 +110,28 @@ TEST(WorkbenchDxc, ProjectReplacementDuringSaveAllRefusesBeforeLaunchingOldProfi
     ASSERT_TRUE(rig.workbench->openPath(dir.join("project/test.hlsl")));
     ASSERT_TRUE(rig.view()->editor().document().replace({frost::ByteOffset{0}, frost::ByteOffset{0}},
                                                         "// dirty before Save All\n", {}));
-    bool switched = false;
-    // Opening another plain folder changes project admission without saving or closing documents.
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("project/notes.txt")));
+    auto* notesView = rig.view(1);
+    ASSERT_NE(notesView, nullptr);
+    ASSERT_TRUE(notesView->path().ends_with("notes.txt"));
+    ASSERT_TRUE(notesView->editor().document().replace({frost::ByteOffset{0}, frost::ByteOffset{0}}, "saved ", {}));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("project/test.hlsl")));
+    int transforms = 0;
     rig.workbench->documents().setSaveTransform([&](const frost::document::FileDocument&, frost::document::SaveReason) {
-        if (!switched) {
+        ++transforms;
+        EXPECT_FALSE(rig.workbench->openPath(dir.join("other")));
+        return frost::document::SaveTransform{};
+    });
+    bool switched = false;
+    auto& registry = rig.workbench->documentRegistry();
+    const std::string sourcePath = registry.canonicalize(dir.join("project/test.hlsl"));
+    // Save All reports the saved document synchronously. Replace the project once the write
+    // and its file-document lifetime have settled, before DXC can resume old-project admission.
+    const auto listener = registry.subscribe([&](const std::string& path) {
+        if (!switched && path == sourcePath) {
             switched = true;
             EXPECT_TRUE(rig.workbench->openPath(dir.join("other")));
         }
-        return frost::document::SaveTransform{};
     });
     QTimer::singleShot(0, [&] {
         auto* dialog = dxcDialog();
@@ -126,8 +141,17 @@ TEST(WorkbenchDxc, ProjectReplacementDuringSaveAllRefusesBeforeLaunchingOldProfi
         dialog->accept();
     });
     rig.workbench->showDxcDiagnostics();
-    EXPECT_TRUE(switched);
-    EXPECT_TRUE(launcher.launches().empty());
+    registry.unsubscribe(listener);
     rig.workbench->documents().setSaveTransform({});
+    EXPECT_EQ(transforms, 2);
+    EXPECT_TRUE(switched);
+    EXPECT_EQ(rig.workbench->projectRoot(), registry.canonicalize(dir.join("other")));
+    const auto saved = frost::io::realFileSystem().readFile(dir.join("project/test.hlsl"));
+    ASSERT_TRUE(saved);
+    EXPECT_EQ(*saved, "// dirty before Save All\nfloat4 main():SV_Target{return 0;}\n");
+    const auto notes = frost::io::realFileSystem().readFile(dir.join("project/notes.txt"));
+    ASSERT_TRUE(notes);
+    EXPECT_EQ(*notes, "saved notes\n");
+    EXPECT_TRUE(launcher.launches().empty());
 }
 } // namespace

@@ -172,9 +172,9 @@ TEST_F(SaveManagerTest, SaveAllSavesEveryDirtyDocument) {
     fs.injectFault(io::FsOp::Write, path("c.txt"), ErrorCode::PermissionDenied);
     const SaveAllResult all = manager().saveAll();
     ASSERT_EQ(all.saved.size(), 1U);
-    EXPECT_EQ(all.saved[0], a);
+    EXPECT_EQ(all.saved[0], a->path());
     ASSERT_EQ(all.failed.size(), 1U);
-    EXPECT_EQ(all.failed[0].document, c);
+    EXPECT_EQ(all.failed[0].path, c->path());
     EXPECT_EQ(all.failed[0].error.code(), ErrorCode::PermissionDenied);
     EXPECT_EQ(read("a.txt"), "A\n");
     EXPECT_EQ(read("b.txt"), "b\n");
@@ -295,6 +295,34 @@ TEST_F(SaveManagerTest, OpeningSweepsStaleTempFiles) {
     ASSERT_NE(open("a.txt"), nullptr);
     EXPECT_FALSE(fs.exists(stale).value());
     EXPECT_TRUE(fs.exists(fresh).value()); // Younger than SaveManagerOptions::staleTempAge.
+}
+
+TEST_F(SaveManagerTest, PreSaveCallbackCannotRecursivelySaveOrCloseAnOwnedDocument) {
+    writeExternally("active.txt", "before");
+    FileDocument* document = open("active.txt");
+    ASSERT_NE(document, nullptr);
+    edit(*document, 0, 6, "after");
+    int callbacks = 0;
+    manager().setSaveTransform([&](const FileDocument&, SaveReason) {
+        ++callbacks;
+        EXPECT_TRUE(manager().saving());
+        const auto nestedSave = manager().save(*document);
+        EXPECT_FALSE(nestedSave);
+        if (!nestedSave)
+            EXPECT_EQ(nestedSave.error().code(), ErrorCode::Busy);
+        const auto nestedClose = manager().close(*document);
+        EXPECT_FALSE(nestedClose);
+        if (!nestedClose)
+            EXPECT_EQ(nestedClose.error().code(), ErrorCode::Busy);
+        return SaveTransform{};
+    });
+    const auto saved = manager().saveAll();
+    EXPECT_EQ(callbacks, 1);
+    EXPECT_FALSE(manager().saving());
+    ASSERT_TRUE(saved.failed.empty());
+    ASSERT_TRUE(manager().close(*document));
+    EXPECT_EQ(saved.saved, std::vector<std::string>{path("active.txt")});
+    EXPECT_EQ(read("active.txt"), "after");
 }
 
 TEST_F(SaveManagerTest, CompletedSaveObserversCoverSaveAllSaveAsAndSkipNoopOrCancelledWrites) {
@@ -418,7 +446,7 @@ TEST_F(SaveManagerTest, CommittedWarningSurvivesSingleSaveSaveAllAndAutosave) {
     auto all = warningManager.saveAll();
     ASSERT_EQ(all.saved.size(), 1u);
     ASSERT_EQ(all.warnings.size(), 1u);
-    EXPECT_EQ(all.warnings[0].document, &doc);
+    EXPECT_EQ(all.warnings[0].path, doc.path());
     EXPECT_FALSE(doc.dirty());
     EXPECT_EQ(read("warning.txt"), "two");
     edit(doc, 0, 3, "end");
@@ -427,7 +455,7 @@ TEST_F(SaveManagerTest, CommittedWarningSurvivesSingleSaveSaveAllAndAutosave) {
     ASSERT_TRUE(automatic);
     ASSERT_EQ(automatic->saved.size(), 1u);
     ASSERT_EQ(automatic->warnings.size(), 1u);
-    EXPECT_EQ(automatic->warnings[0].document, &doc);
+    EXPECT_EQ(automatic->warnings[0].path, doc.path());
     EXPECT_EQ(completed, 3);
     EXPECT_FALSE(doc.dirty());
     EXPECT_EQ(read("warning.txt"), "end");
@@ -562,7 +590,7 @@ TEST_F(SaveManagerTest, AnExplicitSaveAfterAnAutosaveAppliesWhatTheAutosaveSpare
     // explicit save although the autosave moved the merge base. The unedited "keep  " stays.
     caret.clear();
     const SaveAllResult all = manager().saveAll(SaveReason::SaveAll);
-    EXPECT_EQ(all.saved, std::vector<FileDocument*>{document}); // n.txt has nothing pending.
+    EXPECT_EQ(all.saved, std::vector<std::string>{document->path()}); // n.txt has nothing pending.
     EXPECT_TRUE(all.skipped.empty());
     EXPECT_TRUE(all.failed.empty());
     EXPECT_EQ(read("m.txt"), "keep  \nb\nc\n");
