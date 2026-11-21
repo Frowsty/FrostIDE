@@ -834,7 +834,8 @@ void RunManager::stop(RunId run) {
             handlers = entry.handlers;
         } else if (entry.taskSession) {
             entry.taskSession->stop(); // Its exit finishes the run as stopped (taskExited).
-        } else if (entry.status.phase == RunPhase::BeforeLaunch && entry.usedBeforeLaunch) {
+        } else {
+            // Final launch-plan resolution can own a child even when there was no before-launch handler.
             source = entry.stop;
         }
     }

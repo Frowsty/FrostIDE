@@ -234,6 +234,7 @@ TEST(FrostEngineRun, StopCancelsTheRealToolLifetimeInsideFinalTargetResolution) 
     io::ScriptedProcessLauncher launcher;
     launcher.expect({.expectExecutable = path("target-query"), .neverExits = true});
     test::RunCollector collector;
+    std::stop_source cleanup;
     auto manager = RunManager::create(launcher);
     RunConfiguration config;
     config.id = "managed.sdk.resolution";
@@ -248,7 +249,9 @@ TEST(FrostEngineRun, StopCancelsTheRealToolLifetimeInsideFinalTargetResolution) 
         query.stdoutMode = io::Stdio::Pipe;
         query.stderrMode = io::Stdio::Pipe;
         query.killOnClose = true;
-        auto result = io::runToCompletion(launcher, query, {}, 30s, stop);
+        std::stop_callback cancelled(stop, [&] { cleanup.request_stop(); });
+        // The scripted launcher treats a finite deadline as an immediate timeout.
+        auto result = io::runToCompletionUntil(launcher, query, {}, std::nullopt, cleanup.get_token());
         if (!result)
             return std::unexpected(result.error());
         return plan;
@@ -258,9 +261,12 @@ TEST(FrostEngineRun, StopCancelsTheRealToolLifetimeInsideFinalTargetResolution) 
     const auto deadline = std::chrono::steady_clock::now() + 3s;
     while (launcher.launches().empty() && std::chrono::steady_clock::now() < deadline)
         std::this_thread::yield();
+    if (launcher.launches().empty())
+        cleanup.request_stop();
     ASSERT_FALSE(launcher.launches().empty());
     manager->stop(*started);
     auto finished = collector.waitFinished(5s).result;
+    cleanup.request_stop();
     ASSERT_TRUE(finished);
     EXPECT_TRUE(finished->stopped);
     ASSERT_EQ(launcher.launches().size(), 1);
