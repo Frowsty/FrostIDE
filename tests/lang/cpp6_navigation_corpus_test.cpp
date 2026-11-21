@@ -221,19 +221,17 @@ private:
     fl::CompileCommandsLocation m_location;
 };
 
-std::optional<std::string> locateFrostEngineCorpusDir() {
+std::optional<std::string> locateFrostEngineCorpusDir(std::string_view pinnedSha) {
     auto& fs = frost::io::realFileSystem();
     const std::string direct = frost::test::environment("FROST_CORPUS_DIR");
     if (!direct.empty() && fs.exists(direct + "/Frost/src/Frost/Core/Application.cpp").value_or(false)) {
-        return frost::io::normalizePath(direct).value_or(direct);
+        return fs.physicalPath(direct).value_or(frost::io::normalizePath(direct).value_or(direct));
     }
     const std::string root = frost::test::environment("FROST_CORPORA_ROOT");
     if (!root.empty()) {
-        for (std::string_view sub : {"/frostengine-12b8c6de4c38", "/FrostEngine"}) {
-            const std::string candidate = root + std::string(sub);
-            if (fs.exists(candidate + "/Frost/src/Frost/Core/Application.cpp").value_or(false)) {
-                return frost::io::normalizePath(candidate).value_or(candidate);
-            }
+        const auto candidate = frost::io::joinPath(root, "frostengine-" + std::string(pinnedSha.substr(0, 12)));
+        if (candidate && fs.exists(*candidate + "/Frost/src/Frost/Core/Application.cpp").value_or(false)) {
+            return fs.physicalPath(*candidate).value_or(*candidate);
         }
     }
     return std::nullopt;
@@ -270,19 +268,17 @@ constexpr CorpusSymbolTarget kCorpusTenSymbols[10] = {
 
 void checkCpp6Corpus(bool coldCache) {
     frost::test::disableCrashDialogs();
-    const auto corpusDirOpt = locateFrostEngineCorpusDir();
+    constexpr std::string_view pinnedSha = FROST_CORPUS_FROSTENGINE_SHA;
+    static_assert(pinnedSha.size() == 40);
+    const auto corpusDirOpt = locateFrostEngineCorpusDir(pinnedSha);
     ASSERT_TRUE(corpusDirOpt.has_value()) << "CPP-6 corpus gate requires the pinned FrostEngine clone";
     const std::string& corpusDir = *corpusDirOpt;
-    const std::string pinnedSha = FROST_CORPUS_FROSTENGINE_SHA;
-    ASSERT_GE(pinnedSha.size(), 12U);
-    ASSERT_NE(corpusDir.find(pinnedSha.substr(0, 12)), std::string::npos)
-        << "CPP-6 must run against the pinned clone named by corpora.lock.json";
     const auto gitHead = frost::io::realFileSystem().readFile(corpusDir + "/.git/HEAD");
     ASSERT_TRUE(gitHead.has_value()) << "CPP-6 corpus must be a detached clone with readable .git/HEAD";
     std::string actualSha = *gitHead;
     while (!actualSha.empty() && (actualSha.back() == '\r' || actualSha.back() == '\n'))
         actualSha.pop_back();
-    ASSERT_EQ(actualSha, pinnedSha) << "CPP-6 corpus directory name does not prove its checkout; compare HEAD";
+    ASSERT_EQ(actualSha, pinnedSha) << "CPP-6 requires the detached checkout pinned in corpora.lock.json";
     frost::test::EngineBuildLock buildLock(corpusDir + ".build.lock");
     ASSERT_TRUE(buildLock.held()) << "could not acquire the pinned corpus build lock";
     const auto rawCdbOpt = locateCorpusCompileCommands(corpusDir);
