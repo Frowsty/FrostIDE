@@ -29,8 +29,12 @@ _SCRUBBED = ("FROST_QT_ROOT", "FROST_CORPUS_ROOT", "SOURCE_DATE_EPOCH", "FROST_P
 
 
 def clean_env(**extra: str) -> dict[str, str]:
-    """The current environment without the FROST_* locations, plus `extra`."""
+    """Isolate the host's tool settings, then apply the fixture's overrides."""
     env = {k: v for k, v in os.environ.items() if k not in _SCRUBBED}
+    if os.name == "nt":
+        # The fixtures invoke Windows PowerShell 5.1. Let it discover its own
+        # modules even when the parent launched Python from PowerShell 7.
+        env.pop("PSMODULEPATH", None)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env.update(extra)
     return env
