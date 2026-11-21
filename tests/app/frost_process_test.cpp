@@ -1963,8 +1963,9 @@ TEST(FrostProcess, AppDllEmbedsNoManifest) {
 
 // Whether `name` (lower case) is a DLL frost_app.dll may import (see the test below).
 bool allowedAppImport(std::string_view name) {
-    static constexpr std::string_view kSystem[] = {"kernel32.dll", "user32.dll", "advapi32.dll",
-                                                   "shell32.dll",  "bcrypt.dll", "winhttp.dll"};
+    static constexpr std::string_view kSystem[] = {"kernel32.dll", "user32.dll",   "advapi32.dll",
+                                                   "shell32.dll",  "bcrypt.dll",   "winhttp.dll",
+                                                   "userenv.dll",  "iphlpapi.dll", "ole32.dll"};
     if (std::ranges::find(kSystem, name) != std::end(kSystem)) {
         return true;
     }
@@ -1989,6 +1990,8 @@ TEST(FrostProcess, AppDllImportsOnlyAllowedDlls) {
      * in process), and nothing delay-loaded that
      * could change how the launcher's restart rules apply (ADR 0012).
      * The application separately imports Qt Network for the consent-gated updater (ADR 0075).
+     * The Windows AppContainer sandbox requires userenv.dll, Mono loopback peer verification
+     * requires iphlpapi.dll, and the Windows Spell Checking API uses ole32.dll.
      *
      * The one delay import allowed is ws2_32.dll, which every binary that links frost_io
      * delay-loads (src/io/CMakeLists.txt, ADR 0020): frost_app.dll links frost_io for the crash

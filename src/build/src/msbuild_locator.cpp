@@ -90,9 +90,7 @@ Result<std::string> msbuildPathFor(std::string_view installationPath) {
 
 Result<std::string> defaultVswherePath() {
 #ifdef _WIN32
-    // SHGetFolderPathW fills a caller buffer; SHGetKnownFolderPath's result would need
-    // CoTaskMemFree, an ole32.dll import that frost_app.dll may not have
-    // (FrostProcess.AppDllImportsOnlyAllowedDlls). Both read the same known folder.
+    // SHGetFolderPathW fills a caller-owned buffer and keeps toolchain discovery independent of COM.
     wchar_t folder[MAX_PATH] = {};
     const HRESULT hr = SHGetFolderPathW(nullptr, CSIDL_PROGRAM_FILESX86, nullptr, SHGFP_TYPE_CURRENT, folder);
     if (FAILED(hr) || folder[0] == L'\0') {

@@ -38,8 +38,7 @@ namespace {
 }
 
 [[nodiscard]] Result<std::string> programFilesX86() {
-    // SHGetFolderPathW, not SHGetKnownFolderPath, whose result needs CoTaskMemFree (ole32.dll),
-    // an import frost_app.dll may not have (FrostProcess.AppDllImportsOnlyAllowedDlls).
+    // SHGetFolderPathW fills a caller-owned buffer and keeps toolchain discovery independent of COM.
     wchar_t folder[MAX_PATH] = {};
     const HRESULT hr = SHGetFolderPathW(nullptr, CSIDL_PROGRAM_FILESX86, nullptr, SHGFP_TYPE_CURRENT, folder);
     if (FAILED(hr) || folder[0] == L'\0') {

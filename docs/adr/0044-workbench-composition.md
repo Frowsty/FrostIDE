@@ -65,10 +65,14 @@ solution, edits, saves, builds, lists errors and jumps to them, with clangd's li
 - Recent projects are the `general.recentProjects` application setting, newest first, at most 20.
 - The save manager's disk work still runs on the GUI thread (TODO(M1) in `workbench.hpp`).
 - Range decorations keep their byte ranges until clangd publishes again. They are not mapped through edits.
-- frost_app.dll now links the editor, the build service and clangd. Its import allowlist
-  (FrostProcess.AppDllImportsOnlyAllowedDlls) is unchanged, and two seams keep it:
-  - frost::build and frost::lang find Program Files (x86) with `SHGetFolderPathW`. `SHGetKnownFolderPath`
-    would need `CoTaskMemFree`, which is in ole32.dll.
+- frost_app.dll links the editor, the build service and clangd. `FrostProcess.AppDllImportsOnlyAllowedDlls`
+  checks its explicit Windows system DLL allowlist.
+  - `userenv.dll` provides `CreateAppContainerProfile` and `DeriveAppContainerSidFromAppContainerName`
+    for the Windows extension sandbox.
+  - `iphlpapi.dll` provides `GetExtendedTcpTable` to verify that the selected Mono process owns the
+    connected loopback peer.
+  - `ole32.dll` initializes COM, creates the Windows spell checker, and frees COM-allocated spell
+    check results. Toolchain discovery still uses `SHGetFolderPathW` with a caller-owned buffer.
   - `src/app/src/absl_symbolize_windows.cpp` replaces abseil's symbolizer, which re2's fatal-error stack dump
     uses, with one that names nothing, as abseil's own unimplemented symbolizer does. Without it frost_app.dll
     would import dbghelp.dll. FrostIDE symbolizes offline (ADR 0022).
