@@ -12,6 +12,29 @@
 - Plan reference: PLAN.md section 2 ("Editor rendering"), section 4 (B1, B2, B5, B6, B15), section 6.3 (session
   precheck), M0 spike S1, risk T10
 
+## Repeatable empty-workspace launch measurement
+
+On an unlocked, quiet Windows console with the physical monitor on, run the existing
+Desktop Duplication probe against an actual FrostIDE build:
+
+```powershell
+& "$env:FROST_SDK\py\Scripts\python.exe" -I tools\perf_b1.py `
+    --probe build\win-clangcl\tests\perf\s1\Release\s1_first_frame.exe `
+    --frost build\win-clangcl\src\app\Release\frost.exe `
+    --out-dir E:\FrostBuilds\perf\b1-empty-warm-01
+```
+
+Build the two executables and the adjacent `frost_app.dll` before measuring. Use
+a new output directory and keep keyboard and mouse idle during capture. The
+runner points AppData at a fresh directory, requires both native session checks
+and twenty valid timed launches, and retains the raw reports and SHA-256 digests
+for the probe, launcher and application DLL. Windows input during capture
+invalidates the run. Exit 0 means a component measurement was collected. Exit 3
+means the run was invalid. This pixel-threshold endpoint includes the documented
+DWM fade delay. R3 reopen, true cold launches, ETW FirstPresent correlation,
+reference hardware qualification, baseline comparison and the full release gate
+remain open.
+
 ## Context
 PLAN.md ships the raster QPainter editor backend (QGlyphRun cache) and builds a QRhiWidget glyph-atlas backend only
 if the S1 gate fails at 5120x1440 @ 144 Hz. The S1 gate is B6 (10 s fling: UI CPU per frame p99 at most 5 ms,
