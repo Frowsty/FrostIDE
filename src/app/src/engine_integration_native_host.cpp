@@ -193,6 +193,7 @@ void EngineIntegration::revokeNativeHost(EngineNativeHostToken token, bool prese
     impl.awaitingOwnedAuthentication = false;
     impl.clearSession(false, preserve);
     impl.updateControls();
+    impl.refreshDeferredProjectContent();
 }
 Result<EngineLuaDebugOwner> EngineIntegration::captureNativeLuaDebugOwner(EngineNativeHostToken token) {
     auto& impl = *m_impl;
@@ -307,5 +308,6 @@ void EngineIntegration::nativeHostEnded(EngineNativeHostToken token, const debug
     impl.awaitingOwnedAuthentication = false;
     impl.clearSession(false, preserveCrash);
     impl.updateControls();
+    impl.refreshDeferredProjectContent();
 }
 } // namespace frost::app

@@ -110,8 +110,9 @@ TEST(FrostEngineRunUi, ProcessIdentityAndPrivateOutputReachSessionHooksAndStopOw
     hooks.engineLaunchAdmissionFor = [](const auto&) -> std::function<Result<void>()> {
         return []() -> Result<void> { return {}; };
     };
-    hooks.engineLaunchPlanFor = [](const auto&) -> std::function<Result<run::LaunchPlan>(run::LaunchPlan)> {
-        return [](run::LaunchPlan plan) -> Result<run::LaunchPlan> {
+    hooks.engineLaunchPlanFor =
+        [](const auto&) -> std::function<Result<run::LaunchPlan>(run::LaunchPlan, std::stop_token)> {
+        return [](run::LaunchPlan plan, std::stop_token) -> Result<run::LaunchPlan> {
             plan.arguments[1] = path("physical project/Game.frostproj");
             return plan;
         };
@@ -193,8 +194,8 @@ TEST(FrostEngineRunUi, PhysicalProjectResolutionCannotReplaceExecutableOrExtraAr
             return []() -> Result<void> { return {}; };
         };
         hooks.engineLaunchPlanFor =
-            [replaceProgram](const auto&) -> std::function<Result<run::LaunchPlan>(run::LaunchPlan)> {
-            return [replaceProgram](run::LaunchPlan plan) -> Result<run::LaunchPlan> {
+            [replaceProgram](const auto&) -> std::function<Result<run::LaunchPlan>(run::LaunchPlan, std::stop_token)> {
+            return [replaceProgram](run::LaunchPlan plan, std::stop_token) -> Result<run::LaunchPlan> {
                 plan.arguments[1] = path("physical project/Game.frostproj");
                 if (replaceProgram) {
                     plan.program = path("unselected.exe");

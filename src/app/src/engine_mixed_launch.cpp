@@ -519,7 +519,7 @@ Result<void> EngineMixedLaunchCoordinator::prepare(const run::RunConfiguration& 
             if (!admitted)
                 plan = std::unexpected(admitted.error());
             else
-                plan = j->launch.resolve(*result.plan);
+                plan = j->launch.resolve(*result.plan, j->stop.get_token());
             if (plan) {
                 auto still = j->launch.admission();
                 if (!still)

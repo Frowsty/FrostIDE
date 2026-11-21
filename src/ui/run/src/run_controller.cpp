@@ -641,16 +641,17 @@ Result<build::RunId> RunController::runNative(const run::RunConfiguration& confi
                 return fail(ErrorCode::PermissionDenied, "FrostEngine launch has no current trust/session admission");
             };
         }
-        std::function<Result<run::LaunchPlan>(run::LaunchPlan)> resolve;
+        std::function<Result<run::LaunchPlan>(run::LaunchPlan, std::stop_token)> resolve;
         if (m_hooks.engineLaunchPlanFor) {
             resolve = m_hooks.engineLaunchPlanFor(launchConfiguration);
         }
-        handlers.transformLaunchPlan = [resolve = std::move(resolve)](run::LaunchPlan plan) -> Result<run::LaunchPlan> {
+        handlers.transformLaunchPlanWithCancellation =
+            [resolve = std::move(resolve)](run::LaunchPlan plan, std::stop_token stop) -> Result<run::LaunchPlan> {
             if (!resolve) {
                 return fail(ErrorCode::PermissionDenied, "FrostEngine launch has no physical project resolver");
             }
             const run::LaunchPlan original = plan;
-            auto transformed = resolve(std::move(plan));
+            auto transformed = resolve(std::move(plan), stop);
             if (!transformed) {
                 return std::unexpected(std::move(transformed.error()));
             }

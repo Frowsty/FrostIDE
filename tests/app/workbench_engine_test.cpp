@@ -192,11 +192,14 @@ class EngineRunLauncher final : public frost::io::IProcessLauncher {
 public:
     frost::io::ScriptedProcessLauncher runs;
     frost::io::ScriptedProcessLauncher cli;
+    std::function<frost::Result<std::unique_ptr<frost::io::IProcess>>(const frost::io::ProcessSpec&)> projectCli;
     std::function<void(const frost::io::ProcessSpec&)> afterRunLaunch;
     frost::Result<std::unique_ptr<frost::io::IProcess>> launch(const frost::io::ProcessSpec& spec) override {
         if (!spec.arguments.empty() &&
             (spec.arguments.front() == "project.info" || spec.arguments.front() == "assets.list" ||
              spec.arguments.front() == "schema.export")) {
+            if (projectCli)
+                return projectCli(spec);
             cli.expect(frost::io::ScriptedProcess{
                 .launchError = frost::Error(frost::ErrorCode::Unsupported,
                                             "the lifecycle fixture does not provide a project CLI")});
@@ -1198,6 +1201,55 @@ TEST(WorkbenchEngine, AcceptedBeforeTaskFailureReleasesExactOwnedReservationAndA
     ASSERT_TRUE(waitFor([&] { return runReservationReleased(rig); }, 5s));
     ASSERT_EQ(launcher.runs.launches().size(), 2U);
     EXPECT_EQ(launcher.runs.launches().back().spec.executable, program);
+}
+TEST(WorkbenchEngine, StartEditorWaitsForContentScanAndDefersRefreshDuringStartup) {
+    WorkDir dir("engine-start-content-scan");
+    const auto project = dir.join("project");
+    dir.write("project/Game.frostproj", R"({"Version":1,"General":{"Name":"Game","StartScene":19}})");
+    dir.write("project/Assets/Main.fscene", "{}");
+    const auto program = editorProgram(dir);
+    AssetIndexCli content(project, "Assets/Before.lua", "Assets/After.lua");
+    EngineRunLauncher launcher;
+    std::atomic<int> scans = 0;
+    std::atomic<bool> scanReleased = false;
+    launcher.projectCli = [&](const frost::io::ProcessSpec& spec) {
+        if (spec.arguments.front() == "assets.list" && ++scans == 1)
+            scanReleased.wait(false);
+        return content.launch(spec);
+    };
+    WorkbenchRig rig(dir, runOptions(dir, launcher, program));
+    const auto releaseScan = [&] {
+        scanReleased.store(true);
+        scanReleased.notify_all();
+    };
+    const QScopeGuard unblock(releaseScan);
+    ASSERT_TRUE(openTrusted(rig, project));
+    ASSERT_TRUE(waitForConfiguration(rig));
+    ASSERT_TRUE(waitFor([&] { return scans.load() == 1; }, 3s));
+
+    const auto first = rig.workbench->startEngineEditor();
+    ASSERT_TRUE(first);
+    EXPECT_FALSE(waitFor([&] { return !launcher.runs.launches().empty(); }, 250ms));
+    rig.workbench->runController()->stop();
+    ASSERT_TRUE(waitFor([&] { return runReservationReleased(rig); }, 3s));
+    EXPECT_TRUE(launcher.runs.launches().empty());
+
+    launcher.runs.expect(frost::io::ScriptedProcess{.expectExecutable = program, .neverExits = true});
+    const auto second = rig.workbench->startEngineEditor();
+    ASSERT_TRUE(second);
+    EXPECT_NE(*first, *second);
+    EXPECT_FALSE(waitFor([&] { return !launcher.runs.launches().empty(); }, 250ms));
+    releaseScan();
+    ASSERT_TRUE(waitFor([&] { return rig.workbench->engineState().boolAt("awaitingAuthentication") == true; }, 3s));
+    ASSERT_EQ(launcher.runs.launches().size(), 1U);
+    ASSERT_TRUE(rig.workbench->refreshEngineInstances());
+    ASSERT_TRUE(waitFor([&] { return rig.workbench->engineState().boolAt("discoveryBusy") == false; }, 3s));
+    EXPECT_FALSE(waitFor([&] { return scans.load() > 1; }, 250ms));
+    rig.workbench->runController()->stop();
+    ASSERT_TRUE(waitFor([&] { return runReservationReleased(rig); }, 3s));
+    ASSERT_TRUE(waitFor([&] { return scans.load() == 2; }, 3s));
+    ASSERT_TRUE(
+        waitFor([&] { return rig.workbench->engineState().find("engineProject")->boolAt("available") == true; }, 3s));
 }
 TEST(WorkbenchEngine, MalformedOwnedEndpointStopsItsRunAndAllowsFreshLaunch) {
     WorkDir dir("engine-malformed-endpoint");

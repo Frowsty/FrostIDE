@@ -18,7 +18,7 @@ struct EngineNativeHostLaunch {
     run::RunConfiguration configuration;
     std::string trustRoot;
     std::function<Result<void>()> admission;
-    std::function<Result<run::LaunchPlan>(run::LaunchPlan)> resolve;
+    std::function<Result<run::LaunchPlan>(run::LaunchPlan, std::stop_token)> resolve;
     std::stop_token projectStop;
 };
 struct EngineNativeHostObservation {

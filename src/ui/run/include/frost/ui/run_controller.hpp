@@ -116,7 +116,8 @@ struct RunControllerHooks {
     // GUI-thread factory retaining immutable run identity; the returned closure resolves the exact
     // project on the dispatcher after admission. Only generated --project argv[1] may change, to an
     // absolute physical project path. Empty/missing resolver refuses launch. The store is unchanged.
-    std::function<std::function<Result<run::LaunchPlan>(run::LaunchPlan)>(const run::RunConfiguration&)>
+    std::function<std::function<Result<run::LaunchPlan>(run::LaunchPlan, std::stop_token)>(
+        const run::RunConfiguration&)>
         engineLaunchPlanFor{};
     // GUI-thread acceptance before queued lifecycle events: supplies the exact reserved run id
     // even if a before-launch task fails and the engine process never reaches Running.

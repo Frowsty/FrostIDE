@@ -309,6 +309,7 @@ Result<void> EngineIntegration::Impl::connectInstance(const EngineInstanceRecord
             if (impl.nativeDebug)
                 impl.nativeDebug->refresh();
             impl.updateControls();
+            impl.refreshDeferredProjectContent();
             emit impl.owner.crashSourceObserved();
         });
     };

@@ -101,7 +101,7 @@ void EngineIntegration::Impl::invalidate(bool stopOwned) {
     if (projectView)
         projectView->clear();
     discoveryBusy = false;
-    projectBusy = false;
+    contentRefreshPending = false;
     if (workbench.m_problems)
         workbench.m_problems->model()->clear(ui::DiagnosticSource::Engine);
     updateControls();

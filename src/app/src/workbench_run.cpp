@@ -149,10 +149,10 @@ void Workbench::createRunService() {
         [this](const run::RunConfiguration& configuration) -> std::function<Result<void>()> {
         return m_engine ? m_engine->launchAdmissionFor(configuration) : std::function<Result<void>()>{};
     };
-    hooks.engineLaunchPlanFor =
-        [this](const run::RunConfiguration& configuration) -> std::function<Result<run::LaunchPlan>(run::LaunchPlan)> {
+    hooks.engineLaunchPlanFor = [this](const run::RunConfiguration& configuration)
+        -> std::function<Result<run::LaunchPlan>(run::LaunchPlan, std::stop_token)> {
         return m_engine ? m_engine->launchPlanFor(configuration)
-                        : std::function<Result<run::LaunchPlan>(run::LaunchPlan)>{};
+                        : std::function<Result<run::LaunchPlan>(run::LaunchPlan, std::stop_token)>{};
     };
     hooks.engineRunAccepted = [this](run::RunId id, const run::RunConfiguration& configuration) {
         if (m_engine)

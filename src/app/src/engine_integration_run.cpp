@@ -15,6 +15,7 @@
 #include <QFile>
 #include <QMetaObject>
 #include <QRandomGenerator>
+#include <QScopeGuard>
 #include <QStandardPaths>
 #include <QTimer>
 
@@ -250,13 +251,20 @@ std::function<Result<void>()> EngineIntegration::launchAdmissionFor(const run::R
     };
 }
 
-std::function<Result<run::LaunchPlan>(run::LaunchPlan)>
+std::function<Result<run::LaunchPlan>(run::LaunchPlan, std::stop_token)>
 EngineIntegration::launchPlanFor(const run::RunConfiguration& configuration) const {
     const auto admission = m_impl->runAdmission;
     if (!admission || admission->id != configuration.id || admission->program != configuration.program ||
         admission->project != configuration.engineProjectPath)
         return {};
-    return [admission](run::LaunchPlan plan) -> Result<run::LaunchPlan> {
+    const auto scan = m_impl->contentScan;
+    return [admission, scan](run::LaunchPlan plan, std::stop_token stop) -> Result<run::LaunchPlan> {
+        if (scan && scan->projectKey == admission->projectKey) {
+            std::unique_lock lock(scan->mutex);
+            scan->completed.wait(lock, stop, [&] { return scan->finished; });
+        }
+        if (stop.stop_requested())
+            return fail(ErrorCode::Cancelled, "Engine launch was cancelled while preparing the project");
         if (!admission->active.load() ||
             !retainEngineProjectIdentity(*admission->fs, admission->root, admission->projectKey,
                                          admission->physicalAdmission))
@@ -573,13 +581,15 @@ void EngineIntegration::processFinished(const run::RunResult& result) {
         startupFailure = result.error ? qs(result.error->message()) : QStringLiteral("Owned engine process exited");
     impl.setStatus(startupFailure);
     impl.updateControls();
+    impl.refreshDeferredProjectContent();
+}
+
+void EngineIntegration::Impl::refreshDeferredProjectContent() {
+    if (contentRefreshPending && !contentScan && (!runAdmission || identity))
+        refreshProjectContent();
 }
 
 void EngineIntegration::Impl::refreshProjectContent() {
-    clearAssetUsages();
-    assetIndex.reset();
-    publishDocumentAssets();
-    const auto generation = ++contentGeneration;
     if (!admitted(epoch, root, trustRevision)) {
         projectView->setUnavailable(QStringLiteral("Trust the project to read its engine content"));
         return;
@@ -588,8 +598,17 @@ void EngineIntegration::Impl::refreshProjectContent() {
         projectView->setUnavailable(QStringLiteral("FrostEditor CLI is unavailable; locate a built editor"));
         return;
     }
-    projectBusy = true;
-    projectView->setUnavailable(QStringLiteral("Reading project settings and assets from FrostEditor..."));
+    // Both CLI queries and the editor's initial project load take FrostEngine's project writer lock.
+    if (contentScan || (runAdmission && !identity)) {
+        contentRefreshPending = true;
+        return;
+    }
+    contentRefreshPending = false;
+    auto scan = std::make_shared<EngineContentScan>(projectKey);
+    contentScan = scan;
+    const auto generation = ++contentGeneration;
+    if (!projectContent)
+        projectView->setUnavailable(QStringLiteral("Reading project settings and assets from FrostEditor..."));
     const auto currentEpoch = epoch;
     const auto expectedRoot = root;
     const auto revision = trustRevision;
@@ -603,7 +622,7 @@ void EngineIntegration::Impl::refreshProjectContent() {
     auto* trust = &workbench.m_services.trust;
     QPointer<EngineIntegration> self(&owner);
     background([self, fs, launcher, trust, currentEpoch, expectedRoot, expectedPhysicalRoot, expectedProjectKey,
-                admission, revision, stop, program, generation] {
+                admission, revision, stop, program, generation, scan] {
         const auto trusted = [trust, fs, expectedRoot, expectedProjectKey, admission, revision, stop] {
             const auto current = trust->snapshot(expectedRoot);
             return !stop.stop_requested() && current.trusted && current.revision == revision &&
@@ -613,18 +632,33 @@ void EngineIntegration::Impl::refreshProjectContent() {
         request.program = program;
         request.project = expectedPhysicalRoot;
         request.stopToken = stop;
-        auto content = engine::loadProjectContent(*fs, *launcher, request, trusted);
+        auto content = [&] {
+            const QScopeGuard complete([&] {
+                {
+                    std::scoped_lock lock(scan->mutex);
+                    scan->finished = true;
+                }
+                scan->completed.notify_all();
+            });
+            return engine::loadProjectContent(*fs, *launcher, request, trusted);
+        }();
         if (!self)
             return;
         QMetaObject::invokeMethod(
             self.data(),
-            [self, currentEpoch, expectedRoot, revision, generation, content = std::move(content)]() mutable {
+            [self, currentEpoch, expectedRoot, revision, generation, scan, content = std::move(content)]() mutable {
                 if (!self)
                     return;
                 auto& impl = *self->m_impl;
+                if (impl.contentScan != scan)
+                    return;
+                impl.contentScan.reset();
+                const QScopeGuard refresh([&] { impl.refreshDeferredProjectContent(); });
                 if (!impl.admitted(currentEpoch, expectedRoot, revision) || impl.contentGeneration != generation)
                     return;
-                impl.projectBusy = false;
+                impl.clearAssetUsages();
+                impl.assetIndex.reset();
+                impl.publishDocumentAssets();
                 if (content) {
                     auto index = engine::AssetIndex::create(*content);
                     if (!index) {

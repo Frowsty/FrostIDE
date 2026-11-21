@@ -95,7 +95,7 @@ public:
     // GUI factory; returned immutable closure is safe on the RunManager dispatcher and outlives
     // this coordinator. It checks the captured reservation and trust revision at actual launch.
     [[nodiscard]] std::function<Result<void>()> launchAdmissionFor(const run::RunConfiguration& configuration) const;
-    [[nodiscard]] std::function<Result<run::LaunchPlan>(run::LaunchPlan)>
+    [[nodiscard]] std::function<Result<run::LaunchPlan>(run::LaunchPlan, std::stop_token)>
     launchPlanFor(const run::RunConfiguration& configuration) const;
     // Independent native export/multiplayer children retain final trust and physical project identity.
     [[nodiscard]] std::function<Result<void>()> sessionToolAdmissionFor(const run::RunConfiguration&) const;

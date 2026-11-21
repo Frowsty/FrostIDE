@@ -18,6 +18,7 @@
 #include <QPointer>
 
 #include <atomic>
+#include <condition_variable>
 #include <deque>
 #include <map>
 #include <mutex>
@@ -66,6 +67,14 @@ struct EngineRunAdmission {
     QString startupFailure; // Workbench thread only.
 };
 
+struct EngineContentScan {
+    explicit EngineContentScan(std::string projectKey) : projectKey(std::move(projectKey)) {}
+    const std::string projectKey;
+    std::mutex mutex;
+    std::condition_variable_any completed;
+    bool finished = false;
+};
+
 struct EngineCommandReply {
     engine::EngineIdentity identity;
     std::string method, message;
@@ -108,7 +117,8 @@ struct EngineIntegration::Impl {
     std::vector<QPointer<QPushButton>> commandButtons;
     QTimer* startupWatch = nullptr;
     bool registered = false, projectRegistered = false, stopped = false, available = false, discoveryBusy = false;
-    bool projectBusy = false;
+    std::shared_ptr<EngineContentScan> contentScan;
+    bool contentRefreshPending = false;
     std::uint64_t epoch = 0, sessionEpoch = 0, discoveryGeneration = 0, contentGeneration = 0;
     std::string root, physicalRoot, projectKey, selectedProject, automationDirectory, chosenProgram;
     std::uint64_t trustRevision = 0;
@@ -208,6 +218,7 @@ struct EngineIntegration::Impl {
     void publishPerformanceLenses();
     void clearShaderPreview();
     void refreshProjectContent();
+    void refreshDeferredProjectContent();
     void openAsset(std::string relative);
     void openProjectSettingsDocument();
     void openLocation(std::string file, int line, int column);
