@@ -75,7 +75,40 @@ def copy_qt_source(archive: Path, stage: Path, pin: dict) -> list[Path]:
     return paths
 
 
-def package(repo: Path, stage: Path, installed: Path, triplet: str, qt_root: Path, archive: Path) -> None:
+def managed_inventory(repo: Path, stage: Path, report: licensecheck.Report,
+                      stage_receipt: Path | None = None) -> tuple[list[Path], dict]:
+    """Index the existing local payloads without copying or editing their notices."""
+    if stage_receipt is None and not any((stage / name).exists() for name in ("roslyn", "FrostManagedDebug")):
+        return [], {}
+    import managed_stage_inventory
+
+    components, provenance = managed_stage_inventory.verified_components(repo, stage, stage_receipt)
+    indexed = {}
+    notices = set()
+    for item in components:
+        paths = item["files"] + item["notices"]
+        for path in paths:
+            if path not in indexed:
+                data = (stage / path).read_bytes()
+                indexed[path] = licensecheck.PackageFile(path, hashlib.sha1(data, usedforsecurity=False).hexdigest(),
+                                                        hashlib.sha256(data).hexdigest())
+        notices.update(item["notices"])
+        report.packages.append(licensecheck.Package(
+            licensecheck._spdx_id("staged-win-" + item["name"]), item["name"], item["version"],
+            item["license"], item["license"], download=item.get("archive", "NOASSERTION"), purl=item.get("purl"),
+            comment=f"{item['role']}. Source recipe: {item['source']}. File analysis covers the listed stage evidence.",
+            relationship="CONTAINS", sha256=item.get("archiveSha256"), files=tuple(indexed[p] for p in paths)))
+        for group in ("files", "notices"):
+            item[group] = [{"path": p, "sha256": indexed[p].sha256} for p in item[group]]
+    pin = managed_stage_inventory.load_json(repo / "sdk/sdk.lock.json")["managedServer"]
+    provenance["buildCarrier"] = {key: pin[key] for key in ("name", "version", "url", "sha256")}
+    provenance["buildCarrier"]["role"] = "Verified build-only archive providing the owned Roslyn host's dependencies"
+    return [stage / name for name in sorted(notices)], {"managedComponents": components,
+                                                       "managedProvenance": provenance}
+
+
+def package(repo: Path, stage: Path, installed: Path, triplet: str, qt_root: Path, archive: Path,
+            stage_receipt: Path | None = None) -> None:
     if not re.fullmatch(r"[a-zA-Z0-9_-]+", triplet):
         raise ValueError("invalid target triplet")
     if not (stage / "frost.exe").is_file():
@@ -87,6 +120,7 @@ def package(repo: Path, stage: Path, installed: Path, triplet: str, qt_root: Pat
     report = licensecheck.run(repo, [installed], [stage], qt_root)
     if report.violations:
         raise ValueError("license inventory failed: " + "; ".join(map(str, report.violations)))
+    managed_paths, managed = managed_inventory(repo, stage, report, stage_receipt)
     notices = []
     for name in installed_ports(installed, triplet):
         # These two local build helpers install no copyright file. Preserve their
@@ -98,7 +132,7 @@ def package(repo: Path, stage: Path, installed: Path, triplet: str, qt_root: Pat
     for path, name in notices:
         if not path.is_file():
             raise ValueError("missing upstream notice: " + name)
-    paths = copy_qt_source(archive, stage, pin)
+    paths = copy_qt_source(archive, stage, pin) + managed_paths
     for source, name in notices:
         target = stage / "licenses/dependencies" / name
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -134,7 +168,7 @@ def package(repo: Path, stage: Path, installed: Path, triplet: str, qt_root: Pat
                     "they are not a list of binaries included in this folder.\n", encoding="utf-8")
     paths.append(note)
     manifest = {"qtSourceUrl": pin["url"], "files": [
-        {"path": p.relative_to(stage).as_posix(), "sha256": digest(p)} for p in paths]}
+        {"path": p.relative_to(stage).as_posix(), "sha256": digest(p)} for p in paths], **managed}
     (stage / "notices-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     print(f"package-notices: {len(paths)} files, {len(report.packages)} inventory packages")
 
@@ -144,11 +178,13 @@ def main() -> int:
     for name in ("repo", "stage", "installed", "qt-root", "qt-source"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--triplet", required=True)
+    parser.add_argument("--stage-receipt", type=Path,
+                        help="bind the managed subtrees to an independently retained unsigned-stage file inventory")
     args = parser.parse_args()
     try:
         package(args.repo.resolve(), args.stage.resolve(), args.installed.resolve(), args.triplet,
-                args.qt_root.resolve(), args.qt_source.resolve())
-    except (OSError, ValueError, KeyError, tarfile.TarError) as error:
+                args.qt_root.resolve(), args.qt_source.resolve(), args.stage_receipt)
+    except (OSError, ValueError, TypeError, KeyError, tarfile.TarError) as error:
         parser.exit(1, f"package-notices: {error}\n")
     return 0
 

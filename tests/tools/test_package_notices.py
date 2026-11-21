@@ -4,11 +4,16 @@
 from __future__ import annotations
 
 import io
+import hashlib
+import json
+from pathlib import Path
 import tarfile
 import unittest
+from unittest.mock import patch
 
 from tools_test_support import TempDirTestCase
 import package_notices as notices
+import managed_stage_inventory as managed
 
 
 class SourceNoticesTest(TempDirTestCase):
@@ -60,6 +65,69 @@ class SourceNoticesTest(TempDirTestCase):
             "Package: one\nFeature: extra\nArchitecture: target\nStatus: install ok installed\n\n"
             "Package: removed\nArchitecture: target\nStatus: deinstall ok not-installed\n", encoding="utf-8")
         self.assertEqual(notices.installed_ports(installed, "target"), ["one"])
+
+    def test_spdx_records_local_notice_path_and_checksums_with_runtime_role(self):
+        repo = Path(__file__).resolve().parents[2]
+        stage = self.tmp / "stage"
+        directory = stage / "roslyn/FrostIDE-Notices"
+        directory.mkdir(parents=True)
+        notice = directory / "example.txt"
+        notice.write_bytes(b"actual staged notice bytes")
+        staged_path = notice.relative_to(stage).as_posix()
+        component = {"name": "FrostRoslynHost", "version": "1.0.0", "license": "Apache-2.0",
+                     "role": "Owned Roslyn language host", "source": "integrations/roslyn-host",
+                     "files": [], "notices": [staged_path]}
+        report = notices.licensecheck.Report()
+        notices.licensecheck.check_sdk_managed(repo, report)
+        self.assertEqual(report.violations, [])
+        with patch.object(managed, "verified_components", return_value=([component], {})):
+            paths, meta = notices.managed_inventory(repo, stage, report)
+        self.assertEqual(paths, [notice])
+        self.assertEqual(meta["managedComponents"][0]["notices"],
+                         [{"path": staged_path, "sha256": notices.digest(notice)}])
+        inventory = self.tmp / "stage.spdx.json"
+        notices.licensecheck.write_sbom(repo, report, inventory)
+        sbom = json.loads(inventory.read_text(encoding="utf-8"))
+        packages = {item["name"]: item for item in sbom["packages"]}
+        files = {item["fileName"]: item for item in sbom["files"]}
+        file = files["./" + staged_path]
+        self.assertIn({"algorithm": "SHA256", "checksumValue": notices.digest(notice)}, file["checksums"])
+        file_sha1 = hashlib.sha1(notice.read_bytes(), usedforsecurity=False).hexdigest()
+        self.assertTrue(packages["FrostRoslynHost"]["filesAnalyzed"])
+        self.assertFalse(packages["csharp-ls"]["filesAnalyzed"])
+        self.assertEqual(packages["FrostRoslynHost"]["packageVerificationCode"]["packageVerificationCodeValue"],
+                         hashlib.sha1(file_sha1.encode("ascii"), usedforsecurity=False).hexdigest())
+        edges = {(item["spdxElementId"], item["relationshipType"], item["relatedSpdxElement"])
+                 for item in sbom["relationships"]}
+        host, carrier = (packages[name]["SPDXID"] for name in ("FrostRoslynHost", "csharp-ls"))
+        self.assertIn(("SPDXRef-FrostIDE", "CONTAINS", host), edges)
+        self.assertIn((host, "CONTAINS", file["SPDXID"]), edges)
+        self.assertIn((carrier, "BUILD_DEPENDENCY_OF", "SPDXRef-FrostIDE"), edges)
+        self.assertNotIn(("SPDXRef-FrostIDE", "CONTAINS", carrier), edges)
+
+    def test_exact_stage_receipt_rejects_changed_managed_payload(self):
+        stage = self.tmp / "stage"
+        roslyn = stage / managed.HOST
+        debug = stage / managed.DEBUG
+        for path in (roslyn, debug):
+            path.mkdir(parents=True)
+        host_manifest = roslyn / managed.roslyn_host.RECORD
+        host_manifest.write_text('{"files": {}}', encoding="utf-8")
+        debug_manifest = debug / "manifest.json"
+        debug_manifest.write_bytes(b"the debugger manifest")
+        for name in ("LICENSE", "NOTICE"):
+            (stage / name).write_text(name, encoding="utf-8")
+        files = {p.relative_to(stage).as_posix(): notices.digest(p) for p in
+                 (host_manifest, debug_manifest, stage / "LICENSE", stage / "NOTICE")}
+        receipt = self.tmp / "assemble-evidence.json"
+        receipt.write_text(json.dumps({"schema": 1, "kind": "unsigned-release-packaging",
+                                       "sourceCommit": "1" * 40, "files": files,
+                                       "managedDebugManifestSha256": files[managed.DEBUG_MANIFEST]}), encoding="utf-8")
+        host_manifest.write_text('{"files": {}, "new": true}', encoding="utf-8")
+        with (patch.object(managed.roslyn_host, "verify_payload"),
+              patch.object(managed.install_payload, "verify", return_value={"files": {}})):
+            with self.assertRaisesRegex(ValueError, "Windows stage receipt digest differs"):
+                managed.verified_components(self.tmp, stage, receipt)
 
 
 if __name__ == "__main__":

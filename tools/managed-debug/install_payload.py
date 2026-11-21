@@ -17,7 +17,7 @@ import tempfile
 from audit_inputs import digest
 
 
-def verify(payload: Path, expected_manifest: str) -> dict:
+def verify(payload: Path, expected_manifest: str, *, rid: str | None = None) -> dict:
     if payload.is_symlink() or not payload.is_dir() or not re.fullmatch(r"[0-9a-fA-F]{64}", expected_manifest):
         raise ValueError("payload or expected manifest digest is invalid")
     manifest = payload / "manifest.json"
@@ -26,6 +26,9 @@ def verify(payload: Path, expected_manifest: str) -> dict:
     record = json.loads(manifest.read_text(encoding="utf-8"))
     if record.get("schema") != 1 or record.get("purpose") != "candidate-source-build":
         raise ValueError("unsupported managed-debug payload manifest")
+    rid = rid or ("win-x64" if os.name == "nt" else "linux-x64")
+    if rid not in ("win-x64", "linux-x64") or record.get("rid") != rid:
+        raise ValueError("managed-debug payload platform differs")
     for key, expected in (("runtimeCommit", "6aa72daa24f66c01c3d7b6a32519e9d21396deec"),
                           ("netcoredbgCommit", "9744e1f051866215611b8440c638042aa2aa2f72"),
                           ("patchSha256", "6379dd5d3fd68f4bb2cbc5ba9252e43bc8650f84bb22c9790968a4396b87a50b"),
@@ -33,7 +36,7 @@ def verify(payload: Path, expected_manifest: str) -> dict:
                           ("sdkVersion", "10.0.403")):
         if record.get(key) != expected:
             raise ValueError(f"payload input pin mismatch: {key}")
-    if os.name == "nt":
+    if rid == "win-x64":
         imports = {"netcoredbg.exe": ["kernel32.dll", "oleaut32.dll", "wsock32.dll"],
                    "dbgshim.dll": sorted(("kernel32.dll", "advapi32.dll", "ole32.dll", "oleaut32.dll", "version.dll",
                        "api-ms-win-crt-stdio-l1-1-0.dll", "api-ms-win-crt-string-l1-1-0.dll",
@@ -69,8 +72,8 @@ def verify(payload: Path, expected_manifest: str) -> dict:
                 "adapter/notices/dotnet-MIT.txt", "adapter/notices/runtime-third-party.txt",
                 "adapter/notices/diagnostics-third-party.txt", "adapter/notices/roslyn-third-party.rtf",
                 "adapter/notices/roslyn-analyzers-third-party.txt", "adapter/scratch-manifest.json"}
-    required.add("adapter/netcoredbg.exe" if os.name == "nt" else "adapter/netcoredbg")
-    required.add("adapter/dbgshim.dll" if os.name == "nt" else "adapter/libdbgshim.so")
+    required.add("adapter/netcoredbg.exe" if rid == "win-x64" else "adapter/netcoredbg")
+    required.add("adapter/dbgshim.dll" if rid == "win-x64" else "adapter/libdbgshim.so")
     required.update("adapter/" + name for name in ("Microsoft.CodeAnalysis.dll", "Microsoft.CodeAnalysis.CSharp.dll",
                     "Microsoft.CodeAnalysis.Scripting.dll", "Microsoft.CodeAnalysis.CSharp.Scripting.dll"))
     required.update("adapter/notices/packages/" + name + ".nupkg.nuspec" for name in (

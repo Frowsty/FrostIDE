@@ -293,6 +293,16 @@ class Package:
     comment: str = ""
     relationship: str = "DEPENDS_ON"
     sha256: str | None = None  # the downloaded archive's SHA-256 (bundled assets)
+    files: tuple[PackageFile, ...] = ()
+
+
+@dataclass(frozen=True)
+class PackageFile:
+    """An actual staged file named relative to the installation."""
+
+    path: str
+    sha1: str
+    sha256: str
 
 
 @dataclass
@@ -1139,6 +1149,7 @@ def write_sbom(repo: Path, report: Report, path: Path) -> None:
         "primaryPackagePurpose": "APPLICATION",
     }
     packages, relationships, used_ids = [root], [], {"SPDXRef-FrostIDE"}
+    files = {}
     relationships.append({"spdxElementId": "SPDXRef-DOCUMENT", "relationshipType": "DESCRIBES",
                           "relatedSpdxElement": "SPDXRef-FrostIDE"})
     refs: set[str] = set()
@@ -1149,7 +1160,7 @@ def write_sbom(repo: Path, report: Report, path: Path) -> None:
         used_ids.add(spdx_id)
         entry = {
             "SPDXID": spdx_id, "name": package.name, "versionInfo": package.version,
-            "downloadLocation": package.download or "NOASSERTION", "filesAnalyzed": False,
+            "downloadLocation": package.download or "NOASSERTION", "filesAnalyzed": bool(package.files),
             "licenseConcluded": package.concluded, "licenseDeclared": package.declared,
             "copyrightText": "NOASSERTION", "comment": package.comment,
         }
@@ -1157,17 +1168,34 @@ def write_sbom(repo: Path, report: Report, path: Path) -> None:
             entry["homepage"] = package.homepage
         if package.sha256:
             entry["checksums"] = [{"algorithm": "SHA256", "checksumValue": package.sha256}]
+        if package.files:
+            combined = "".join(sorted(file.sha1 for file in package.files)).encode("ascii")
+            entry["packageVerificationCode"] = {
+                "packageVerificationCodeValue": hashlib.sha1(combined, usedforsecurity=False).hexdigest(),
+            }
+            entry["licenseInfoFromFiles"] = ["NOASSERTION"]
         if package.purl:
             entry["externalRefs"] = [{"referenceCategory": "PACKAGE-MANAGER", "referenceType": "purl",
                                       "referenceLocator": package.purl}]
         packages.append(entry)
         refs |= _licence_refs(package.declared) | _licence_refs(package.concluded)
-        if package.relationship == "TEST_DEPENDENCY_OF":
-            relationships.append({"spdxElementId": spdx_id, "relationshipType": "TEST_DEPENDENCY_OF",
+        if package.relationship in ("TEST_DEPENDENCY_OF", "BUILD_DEPENDENCY_OF"):
+            relationships.append({"spdxElementId": spdx_id, "relationshipType": package.relationship,
                                   "relatedSpdxElement": "SPDXRef-FrostIDE"})
         else:
-            relationships.append({"spdxElementId": "SPDXRef-FrostIDE", "relationshipType": "DEPENDS_ON",
+            relationships.append({"spdxElementId": "SPDXRef-FrostIDE", "relationshipType": package.relationship,
                                   "relatedSpdxElement": spdx_id})
+        for file in package.files:
+            file_id = "SPDXRef-File-" + hashlib.sha256(file.path.encode("utf-8")).hexdigest()
+            files[file.path] = {
+                "SPDXID": file_id, "fileName": "./" + file.path,
+                "checksums": [{"algorithm": "SHA1", "checksumValue": file.sha1},
+                              {"algorithm": "SHA256", "checksumValue": file.sha256}],
+                "licenseConcluded": "NOASSERTION", "licenseInfoInFiles": ["NOASSERTION"],
+                "copyrightText": "NOASSERTION",
+            }
+            relationships.append({"spdxElementId": spdx_id, "relationshipType": "CONTAINS",
+                                  "relatedSpdxElement": file_id})
     document = {
         "spdxVersion": "SPDX-2.3",
         "dataLicense": "CC0-1.0",
@@ -1179,6 +1207,8 @@ def write_sbom(repo: Path, report: Report, path: Path) -> None:
         "packages": packages,
         "relationships": relationships,
     }
+    if files:
+        document["files"] = list(files.values())
     if refs:
         document["hasExtractedLicensingInfos"] = [
             {"licenseId": ref, "name": ref.removeprefix("LicenseRef-"),
@@ -1291,7 +1321,9 @@ def check_sdk_managed(repo: Path, report: Report) -> None:
             raise ValueError("managed copyright list or MIT permission notice is missing")
         report.packages.append(Package(_spdx_id("managed-" + pin["name"]), pin["name"], pin["version"],
                                        pin["license"], pin["license"], pin["url"],
-                                       purl=f"pkg:nuget/{pin['name']}@{pin['version']}", sha256=pin["sha256"]))
+                                       purl=f"pkg:nuget/{pin['name']}@{pin['version']}",
+                                       comment="Build-only provenance carrier for audited FrostRoslynHost assets",
+                                       relationship="BUILD_DEPENDENCY_OF", sha256=pin["sha256"]))
         seen = set()
         for package in manifest["packages"]:
             name, version, licence = package["name"], package["version"], package["license"]

@@ -134,3 +134,18 @@ or prove bit-for-bit reproducibility across machines. Combined functional verifi
 and the separately corrected Windows formatting failure are recorded in the progress log.
 These local results do not approve general distribution or
 the unverified upstream release archives.
+
+### Windows stage inventory
+
+The Windows notice manifest records the paths and SHA-256 digests of the managed
+payload notices already present in the stage. Its SPDX inventory identifies the
+FrostIDE-owned FrostRoslynHost and PdbGuard, the source-built DAP-only netcoredbg,
+and the Windows x64 dbgshim selected by the package recipe. The csharp-ls archive
+is a build dependency that provides the audited Roslyn assets.
+
+`tools/package_notices.py --stage-receipt PATH` checks the managed subtrees against
+an independently retained unsigned-stage file inventory during replay. Use a
+disposable stage and the source checkout corresponding to the Roslyn receipt.
+The metadata records debugger recipe differences relative to the selected
+checkout. This preserves the distinction between observed stage contents and a
+same-checkout source build. The local-use policy above still applies.
