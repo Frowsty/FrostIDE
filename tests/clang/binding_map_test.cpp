@@ -28,6 +28,13 @@ namespace {
 using frost::rpc::Json;
 using namespace std::chrono_literals;
 
+std::string wirePath(std::string path) {
+#ifdef _WIN32
+    std::ranges::replace(path, '\\', '/');
+#endif
+    return path;
+}
+
 struct CapturedFile {
     std::string bytes;
     std::filesystem::file_time_type modified;
@@ -190,7 +197,7 @@ protected:
     std::string rangeBytes(const Json& range) const {
         const auto offset = range.unsignedAt("offset");
         const auto length = range.unsignedAt("length");
-        EXPECT_EQ(range.stringAt("path"), scratch.join("fixture.cpp"));
+        EXPECT_EQ(range.stringAt("path"), wirePath(scratch.join("fixture.cpp")));
         if (!offset || !length || *offset > source.size() || *length > source.size() - *offset) {
             ADD_FAILURE() << "not a fixture byte range: " << range.dump();
             return {};
@@ -283,7 +290,7 @@ TEST_F(BindingMapTest, SourceManifestDigestsActualTuAndHeaderBuffersEvenWhenUsrs
         EXPECT_NE(inputs, nullptr);
         if (inputs)
             for (const auto& input : inputs->items())
-                if (input.stringAt("path") == scratch.join(file))
+                if (input.stringAt("path") == wirePath(scratch.join(file)))
                     return std::string(input.stringAt("sha256"));
         ADD_FAILURE() << "actual parsed source missing from manifest: " << file;
         return std::string{};
@@ -319,7 +326,7 @@ TEST_F(BindingMapTest, TextualExternalHeaderPreservesContextWithoutBecomingAWork
     const auto* inputs = output->find("sourceInputs");
     ASSERT_NE(inputs, nullptr);
     EXPECT_TRUE(
-        std::ranges::none_of(inputs->items(), [&](const Json& input) { return input.stringAt("path") == header; }));
+        std::ranges::none_of(inputs->items(), [&](const Json& input) { return input.stringAt("path") == wirePath(header); }));
     EXPECT_EQ(snapshot(external.path()), externalBefore);
 }
 
@@ -349,17 +356,26 @@ TEST_F(BindingMapTest, SerializedHeaderAstInsideOrOutsideWorkspaceCannotClaimFre
         auto pch = frost::io::runToCompletion(frost::io::realProcessLauncher(), compile, "", 60s);
         ASSERT_TRUE(pch) << pch.error().message();
         ASSERT_EQ(pch->exitCode, 0) << pch->stderrBytes;
-        Json cdb = command();
-        cdb.find("arguments")->push("-include-pch").push(serialized);
-        ASSERT_TRUE(write("compile_commands.json", Json::array({std::move(cdb)}).dump()));
-        const auto externalBefore = snapshot(external.path());
-        ASSERT_TRUE(externalBefore);
-        auto output = run(request(Json::array({registration("direct", "visibleLuaName")})), 1);
-        ASSERT_TRUE(output);
-        EXPECT_EQ(output->boolAt("translationUnitParsed"), false);
-        EXPECT_EQ(row(*output, "direct").stringAt("reason"), "source-input-buffers-unavailable");
-        EXPECT_TRUE(targets(row(*output, "direct")).empty());
-        EXPECT_EQ(snapshot(external.path()), externalBefore);
+        for (const std::string forwarding : {"", "/clang:", "-clang:"}) {
+            SCOPED_TRACE(forwarding);
+            Json cdb = command();
+            auto* arguments = cdb.find("arguments");
+            if (!forwarding.empty())
+                arguments->push("--driver-mode=cl");
+            arguments->push(forwarding + "-include-pch").push(forwarding + serialized);
+            ASSERT_TRUE(write("compile_commands.json", Json::array({std::move(cdb)}).dump()));
+            const auto externalBefore = snapshot(external.path());
+            ASSERT_TRUE(externalBefore);
+            auto output = run(request(Json::array({registration("direct", "visibleLuaName")})), 1);
+            ASSERT_TRUE(output);
+            EXPECT_EQ(output->boolAt("translationUnitParsed"), false);
+            EXPECT_EQ(row(*output, "direct").stringAt("reason"), "explicit-pch-source-context-unavailable");
+            const auto* context = output->find("compilationContext");
+            ASSERT_NE(context, nullptr);
+            EXPECT_TRUE(context->find("analysisArguments")->items().empty());
+            EXPECT_TRUE(targets(row(*output, "direct")).empty());
+            EXPECT_EQ(snapshot(external.path()), externalBefore);
+        }
     }
 }
 
@@ -440,11 +456,11 @@ TEST_F(BindingMapTest, ProvenMsvcYuFirstForcedHeaderIsParsedTextuallyAndInvocati
     const auto* inputs = output->find("sourceInputs");
     ASSERT_NE(inputs, nullptr);
     EXPECT_TRUE(std::ranges::any_of(inputs->items(), [&](const Json& input) {
-        return input.stringAt("path") == scratch.join("cmake_pch.hxx") &&
+        return input.stringAt("path") == wirePath(scratch.join("cmake_pch.hxx")) &&
                input.stringAt("sha256") == frost::io::sha256Hex(header);
     }));
     EXPECT_TRUE(std::ranges::any_of(inputs->items(), [&](const Json& input) {
-        return input.stringAt("path") == scratch.join("include/nested.hpp");
+        return input.stringAt("path") == wirePath(scratch.join("include/nested.hpp"));
     }));
 }
 

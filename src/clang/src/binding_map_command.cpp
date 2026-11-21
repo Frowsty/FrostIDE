@@ -61,12 +61,17 @@ BindingCompileContext bindingSourceCompileContext(const clang::tooling::CompileC
             cl = arg == "cl";
     std::optional<std::string> usedHeader;
     std::vector<std::string> forced;
-    bool unknownForced = false, explicitSerialized = false;
+    bool unknownForced = false;
     unsigned yu = 0;
     for (std::size_t i = 1; i < command.CommandLine.size(); ++i) {
         llvm::StringRef arg(command.CommandLine[i]);
-        if (arg.starts_with("-include-pch"))
-            explicitSerialized = true;
+        auto frontendArg = arg;
+        if (cl && !frontendArg.consume_front("/clang:"))
+            frontendArg.consume_front("-clang:");
+        if (frontendArg == "-include-pch" || frontendArg.starts_with("-include-pch=")) {
+            result.error = "explicit-pch-source-context-unavailable";
+            return result;
+        }
         if (cl && (arg.starts_with("/Yu") || arg.starts_with("-Yu"))) {
             ++yu;
             usedHeader = sourceHeader(command, arg.drop_front(3), root);
@@ -81,8 +86,7 @@ BindingCompileContext bindingSourceCompileContext(const clang::tooling::CompileC
                 forced.push_back(*header);
         }
     }
-    if (yu && (yu != 1 || !usedHeader || unknownForced || forced.empty() || !same(*usedHeader, forced.front()) ||
-               explicitSerialized)) {
+    if (yu && (yu != 1 || !usedHeader || unknownForced || forced.empty() || !same(*usedHeader, forced.front()))) {
         result.error = "unproven-msvc-pch-source-context";
         return result;
     }
@@ -101,7 +105,7 @@ BindingCompileContext bindingSourceCompileContext(const clang::tooling::CompileC
         }
         result.normalizations.push_back("msvc-yu-fp-transport-to-existing-first-fi-source");
     }
-    if (!forced.empty() && !unknownForced && !explicitSerialized) {
+    if (!forced.empty() && !unknownForced) {
         // Pinned LLVM's driver documents -ignore-pch: source headers stay explicitly included,
         // but no implicit neighboring GCC/Clang cache is consumed. /clang: forwards it in CL mode.
         result.sourceParse.CommandLine.push_back(cl ? "/clang:-ignore-pch" : "-ignore-pch");
