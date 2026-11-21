@@ -62,6 +62,11 @@ upstream assembly/build steps. Linux uses explicit Clang and make. A build recei
 resulting actual binary digest, source and recipe identity without pretending tests or runtime ran.
 No built binary digest is invented in the source pin.
 
+The Windows Clang-cl Luau LSP build supplies a private `alloca.h` compatibility include for the
+pinned rapidyaml dependency. It forwards to the Windows CRT's `_alloca` through `<malloc.h>`.
+The builder leaves upstream sources intact and records the generated include and compiler digests
+in its local build receipt.
+
 These recipes and source pins are not distribution approval. Transitive source/notice graph review,
 Windows native assembler/toolchain compatibility, relocatable payload/system dependencies, built
 artifact verification, actual Luau-LSP/FFI behavior and debugger expansion still need their explicit

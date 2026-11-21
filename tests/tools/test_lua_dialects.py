@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # Dialect manifest generation is local evidence only and never launches a tool or requests network.
-import importlib.util
+import json
 from pathlib import Path
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 ROOT=Path(__file__).resolve().parents[2]
@@ -27,4 +28,51 @@ class LuaDialects(unittest.TestCase):
             record=lua_dialects.pin(name)
             self.assertRegex(record['commit'],r'^[0-9a-f]{40}$'); self.assertRegex(record['licenseSha256'],r'^[0-9a-f]{64}$')
             self.assertIn(record['license'],lua_dialects.ALLOWLIST)
+
+    def test_windows_clang_lsp_build_records_the_private_compatibility_include(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source, work = root / 'source', root / 'work'
+            source.mkdir()
+            license_file = source / 'LICENSE.md'
+            license_file.write_bytes(b'fixture license')
+            args = SimpleNamespace(kind='luau-lsp', source=source, work=work,
+                                   clang=root / 'clang-cl.exe', cmake=root / 'cmake.exe',
+                                   ninja=root / 'ninja.exe', git=root / 'git.exe')
+            for tool in (args.clang, args.cmake, args.ninja, args.git):
+                tool.write_bytes(b'unit fixture; never executed')
+            record = {'commit': 'a' * 40, 'licensePath': license_file.name,
+                      'licenseSha256': lua_dialects.digest(license_file)}
+            windows = SimpleNamespace(name='nt', pathsep=';', environ={'INCLUDE': 'existing SDK includes'})
+            cmake_calls = []
+
+            def run(command, **options):
+                if command[0] == str(args.git):
+                    output = record['commit'] if 'rev-parse' in command else ''
+                    return SimpleNamespace(stdout=output)
+                cmake_calls.append((command, options['env']['INCLUDE']))
+                if '--build' in command:
+                    (work / 'build').mkdir()
+                    (work / 'build' / 'luau-lsp.exe').write_bytes(b'fixture output')
+                return SimpleNamespace(stdout='')
+
+            with mock.patch.object(lua_dialects, 'pin', return_value=record), \
+                    mock.patch.object(lua_dialects, 'os', windows), \
+                    mock.patch.object(lua_dialects, 'subprocess', SimpleNamespace(run=run)):
+                lua_dialects.build(args)
+
+            compat = work / 'clang-cl-crt'
+            shim = compat / 'alloca.h'
+            configure, build = cmake_calls
+            self.assertIn(f'-DCMAKE_C_COMPILER={args.clang}', configure[0])
+            self.assertIn(f'-DCMAKE_CXX_COMPILER={args.clang}', configure[0])
+            self.assertEqual(build[0][-2:], ['--target', 'Luau.LanguageServer.CLI'])
+            self.assertEqual(configure[1], f'{compat};existing SDK includes')
+            self.assertEqual(configure[1], build[1])
+            self.assertEqual(windows.environ['INCLUDE'], 'existing SDK includes')
+            self.assertFalse((work / 'source' / 'alloca.h').exists())
+            receipt = json.loads((work / 'frost-dialect-build.json').read_text(encoding='utf-8'))
+            self.assertEqual(receipt['compatibilityInputs'], [{'path': str(shim), 'sha256': lua_dialects.digest(shim)}])
+            self.assertEqual(receipt['compilers'],
+                             [{'path': str(args.clang), 'sha256': lua_dialects.digest(args.clang)}])
 if __name__=='__main__': unittest.main()

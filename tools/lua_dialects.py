@@ -11,6 +11,7 @@ import shutil
 import subprocess
 from licensecheck import ALLOWLIST
 ROOT = Path(__file__).resolve().parents[1]
+WINDOWS_CLANG_LSP_ALLOCA = b'#pragma once\n#include <malloc.h>\n#ifndef alloca\n#define alloca _alloca\n#endif\n'
 
 def digest(path: Path) -> str:
     with path.open('rb') as stream:
@@ -59,6 +60,8 @@ def build(args) -> None:
     copied = work / 'source'
     shutil.copytree(source, copied, ignore=shutil.ignore_patterns('.git'))
     environment = os.environ.copy()
+    compilers = [args.clang]
+    compatibility = []
     if args.kind == 'luajit':
         if os.name == 'nt':
             # Patch only the private copy, with exact known upstream substitutions. All tools are explicit.
@@ -71,7 +74,7 @@ def build(args) -> None:
                 if text.count(before) != 1: raise ValueError('Pinned LuaJIT build recipe changed')
                 text = text.replace(before, after)
             script.write_text(text, encoding='utf-8')
-            cmd = Path(environment['SystemRoot']) / 'System32/cmd.exe'
+            cmd = Path(environment['SYSTEMROOT']) / 'System32/cmd.exe'
             subprocess.run([str(cmd), '/c', str(script), 'static'], cwd=script.parent, env=environment, check=True)
             artifact = copied / 'src/luajit.exe'
         else:
@@ -80,14 +83,36 @@ def build(args) -> None:
             artifact = copied / 'src/luajit'
     else:
         output = work / 'build'
+        c_compiler = args.clang
+        if args.clang.name.lower().startswith('clang++'):
+            c_compiler = args.clang.with_name('clang' + args.clang.name[len('clang++'):])
+        if not c_compiler.is_file():
+            raise ValueError('Matching Clang C compiler not found: ' + str(c_compiler))
+        if c_compiler != args.clang:
+            compilers.append(c_compiler)
+        if os.name == 'nt' and args.kind == 'luau-lsp' and args.clang.name.lower().startswith('clang-cl'):
+            # Pinned rapidyaml asks Clang for the POSIX header even with the Windows CRT.
+            # Supply the spelling it expects without changing any upstream source bytes.
+            include = work / 'clang-cl-crt'
+            if os.pathsep in str(include):
+                raise ValueError('Windows compatibility include path contains the list separator')
+            include.mkdir()
+            shim = include / 'alloca.h'
+            shim.write_bytes(WINDOWS_CLANG_LSP_ALLOCA)
+            compatibility.append(shim)
+            previous = environment.get('INCLUDE', '')
+            environment['INCLUDE'] = str(include) + (os.pathsep + previous if previous else '')
         subprocess.run([str(args.cmake), '-S', str(copied), '-B', str(output), '-G', 'Ninja',
-            '-DCMAKE_MAKE_PROGRAM='+str(args.ninja), '-DCMAKE_CXX_COMPILER='+str(args.clang), '-DCMAKE_BUILD_TYPE=Release',
+            '-DCMAKE_MAKE_PROGRAM='+str(args.ninja), '-DCMAKE_C_COMPILER='+str(c_compiler),
+            '-DCMAKE_CXX_COMPILER='+str(args.clang), '-DCMAKE_BUILD_TYPE=Release',
             '-DFETCHCONTENT_FULLY_DISCONNECTED=ON', '-DFETCHCONTENT_UPDATES_DISCONNECTED=ON',
-            '-DLUAU_BUILD_TESTS=OFF', '-DLUAU_BUILD_WEB=OFF'], check=True)
-        target = 'Luau.Repl.CLI' if args.kind == 'luau' else 'luau-lsp'
-        subprocess.run([str(args.cmake), '--build', str(output), '--target', target], check=True)
+            '-DLUAU_BUILD_TESTS=OFF', '-DLUAU_BUILD_WEB=OFF'], env=environment, check=True)
+        target = 'Luau.Repl.CLI' if args.kind == 'luau' else 'Luau.LanguageServer.CLI'
+        subprocess.run([str(args.cmake), '--build', str(output), '--target', target], env=environment, check=True)
         artifact = output / (('luau' if args.kind == 'luau' else 'luau-lsp') + ('.exe' if os.name == 'nt' else ''))
     receipt = {'version':1, 'source':record, 'artifact':str(artifact), 'sha256':digest(artifact),
+               'compilers':[{'path':str(path), 'sha256':digest(path)} for path in compilers],
+               'compatibilityInputs':[{'path':str(path), 'sha256':digest(path)} for path in compatibility],
                'recipeSha256':digest(Path(__file__)), 'runtimeExecuted':False, 'testsExecuted':False}
     (work / 'frost-dialect-build.json').write_text(json.dumps(receipt, indent=2)+'\n', encoding='utf-8')
 
