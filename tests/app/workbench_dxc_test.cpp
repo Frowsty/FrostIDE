@@ -35,11 +35,18 @@ TEST(WorkbenchDxc, NormalProfileActionPublishesActualDiagnosticIntoIndependentPr
     rig.show();
     ASSERT_TRUE(rig.workbench->openPath(dir.join("project")));
     ASSERT_TRUE(rig.workbench->openPath(dir.join("project/test.hlsl")));
+    ASSERT_NE(rig.view(), nullptr);
     QTimer::singleShot(0, rig.window.get(), [&] {
         auto* dialog = dxcDialog();
         ASSERT_NE(dialog, nullptr);
-        dialog->findChild<QLineEdit*>("dxcExecutable")->setText(QString::fromStdString(dir.join("installed/dxc.exe")));
-        dialog->findChild<QLineEdit*>("dxcSource")->setText(QString::fromStdString(dir.join("project/test.hlsl")));
+        auto* executable = dialog->findChild<QLineEdit*>("dxcExecutable");
+        auto* source = dialog->findChild<QLineEdit*>("dxcSource");
+        if (!executable || !source) {
+            dialog->reject();
+            FAIL() << "DXC diagnostics dialog is missing the executable or source fields";
+        }
+        executable->setText(QString::fromStdString(dir.join("installed/dxc.exe")));
+        source->setText(QString::fromStdString(dir.join("project/test.hlsl")));
         dialog->findChild<QLineEdit*>("dxcEntry")->setText("main");
         dialog->findChild<QLineEdit*>("dxcTarget")->setText("ps_6_0");
         dialog->accept();
@@ -100,7 +107,8 @@ TEST(WorkbenchDxc, ProjectReplacementDuringSaveAllRefusesBeforeLaunchingOldProfi
     rig.show();
     ASSERT_TRUE(rig.workbench->openPath(dir.join("project")));
     ASSERT_TRUE(rig.workbench->openPath(dir.join("project/test.hlsl")));
-    ASSERT_TRUE(rig.view()->editor().document().replace({0, 0}, "// dirty before Save All\n", {}));
+    ASSERT_TRUE(rig.view()->editor().document().replace({frost::ByteOffset{0}, frost::ByteOffset{0}},
+                                                        "// dirty before Save All\n", {}));
     bool switched = false;
     // Opening another plain folder changes project admission without saving or closing documents.
     rig.workbench->documents().setSaveTransform([&](const frost::document::FileDocument&, frost::document::SaveReason) {
