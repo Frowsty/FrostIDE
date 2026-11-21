@@ -149,6 +149,7 @@ private slots:
     void drainEngineCallbacks();
 
 private:
+    friend struct EngineIntegrationTestAccess;
     struct Impl;
     std::unique_ptr<Impl> m_impl;
 };

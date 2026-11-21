@@ -16,6 +16,7 @@
 #include "frost/ui/toolwindows/build_controller.hpp"
 #include "frost/ui/toolwindows/engine_console.hpp"
 
+#include "engine_integration_internal.hpp"
 #include "engine_json_reference_provider.hpp"
 #include "engine_json_schema_reader.hpp"
 #include "engine_request_helper.hpp"
@@ -26,6 +27,7 @@
 #include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QEventLoop>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
@@ -50,6 +52,12 @@
 
 #include <windows.h>
 #endif
+
+namespace frost::app {
+struct EngineIntegrationTestAccess {
+    static auto callbacks(EngineIntegration& integration) { return integration.m_impl->guiCallbacks; }
+};
+} // namespace frost::app
 
 namespace {
 using namespace std::chrono_literals;
@@ -614,6 +622,49 @@ TEST(WorkbenchEngine, ManagedSelectionRechecksActiveDebugAfterReservationRelease
     EXPECT_TRUE(rig.workbench->debugController()->debugging());
     rig.workbench->debugController()->stop();
     ASSERT_TRUE(waitFor([&] { return !rig.workbench->debugController()->debugging(); }, 5s));
+}
+
+TEST(WorkbenchEngine, EngineCallbackQueueKeepsNestedEventLoopsInOrderAndRejectsLateWork) {
+    WorkDir dir("engine-callback-fifo");
+    WorkbenchRig rig(dir);
+    auto* integration = rig.workbench->findChild<frost::app::EngineIntegration*>();
+    ASSERT_NE(integration, nullptr);
+    const auto queue = frost::app::EngineIntegrationTestAccess::callbacks(*integration);
+
+    QEventLoop nested;
+    QTimer watchdog;
+    watchdog.setSingleShot(true);
+    QObject::connect(&watchdog, &QTimer::timeout, &nested, &QEventLoop::quit);
+    std::string order;
+    bool nestedReturned = false;
+    bool nestedDelivered = false;
+    const auto closeQueue = qScopeGuard([&] { integration->shutdown(); });
+    queue->post([&](auto&) {
+        order += 'A';
+        queue->post([&](auto&) {
+            order += 'D';
+            nestedDelivered = true;
+            nested.quit();
+        });
+        watchdog.start(2000);
+        nested.exec();
+        watchdog.stop();
+        nestedReturned = true;
+    });
+    queue->post([&](auto&) { order += 'B'; });
+    queue->post([&](auto&) { order += 'C'; });
+
+    ASSERT_TRUE(waitFor([&] { return nestedReturned; }, 3s));
+    ASSERT_TRUE(nestedDelivered);
+    EXPECT_EQ(order, "ABCD");
+
+    queue->post([&](auto&) { order += 'E'; });
+    integration->shutdown();
+    {
+        std::jthread late([&] { queue->post([&](auto&) { order += 'F'; }); });
+    }
+    QCoreApplication::processEvents();
+    EXPECT_EQ(order, "ABCD");
 }
 
 TEST(WorkbenchEngine, RefusesUntrustedAndCancelsPendingOnProjectSwitch) {
