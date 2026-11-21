@@ -244,10 +244,12 @@ TEST_F(FileTransactionReplace, PositiveReplacementAndInverseRestoreExactBinaryBe
     ASSERT_TRUE(installed.complete()) << installed.error->describe();
     EXPECT_EQ(installed.receipt.phase, FileReplacementPhase::AfterInstalled);
     expectBytes(target, after);
+    EXPECT_EQ(fs.readFileSnapshot(target, 65536), frost::Result<std::string>(after));
     auto restored = value->restoreBefore();
     ASSERT_TRUE(restored.complete()) << restored.error->describe();
     EXPECT_EQ(restored.receipt.phase, FileReplacementPhase::BeforeRestored);
     expectBytes(target, before);
+    EXPECT_EQ(fs.readFileSnapshot(target, 65536), frost::Result<std::string>(before));
     const auto nativeRestored = supportedSnapshot(target);
     ASSERT_TRUE(nativeRestored) << nativeRestored.error().describe();
     EXPECT_EQ(*nativeBefore, *nativeRestored); // Actual original object and supported metadata, not a reencoded copy.
@@ -255,6 +257,9 @@ TEST_F(FileTransactionReplace, PositiveReplacementAndInverseRestoreExactBinaryBe
     EXPECT_EQ(restored.receipt.images.beforeSha256, receipt.images.beforeSha256);
     EXPECT_FALSE(receipt.beforeMetadataSha256.empty());
     EXPECT_FALSE(receipt.privateAfterMetadataSha256.empty());
+    auto redone = value->reapplyAfter();
+    ASSERT_TRUE(redone.complete()) << redone.error->describe();
+    EXPECT_EQ(fs.readFileSnapshot(target, 65536), frost::Result<std::string>(after));
 }
 
 TEST_F(FileTransactionReplace, EmptyImagesAreActualExistingFiles) {
@@ -615,11 +620,13 @@ TEST_F(FileTransactionReplace, ReversibleMoveAndRedoPreserveExactSourceAndForeig
     ASSERT_TRUE(moved.complete()) << moved.error->describe();
     EXPECT_EQ(moved.receipt.phase, FileReplacementPhase::OriginalMoved);
     expectBytes(destination, before);
+    EXPECT_EQ(fs.readFileSnapshot(destination, 65536), frost::Result<std::string>(before));
     ASSERT_TRUE(value->validateCurrent(true));
     auto restored = value->restoreMove();
     ASSERT_TRUE(restored.complete()) << restored.error->describe();
     EXPECT_EQ(restored.receipt.phase, FileReplacementPhase::MoveRestored);
     expectBytes(target, before);
+    EXPECT_EQ(fs.readFileSnapshot(target, 65536), frost::Result<std::string>(before));
     ASSERT_TRUE(value->reapplyMove().complete());
     expectBytes(destination, before);
 }
@@ -647,6 +654,7 @@ TEST_F(FileTransactionReplace, FreshRecoveryReacquiresOwnedObjectsWithoutTrustin
     auto recovered = recoverFileReplacement(saved, before, after, true, 65536);
     ASSERT_TRUE(recovered) << recovered.error().describe();
     EXPECT_EQ(recovered->receipt()->phase, FileReplacementPhase::AfterInstalled);
+    EXPECT_EQ(fs.readFileSnapshot(target, 65536), frost::Result<std::string>(after));
     auto undone = recovered->restoreBefore();
     ASSERT_TRUE(undone.complete()) << undone.error->describe();
     expectBytes(target, before);
@@ -689,6 +697,7 @@ TEST_F(FileTransactionReplace, CreationPreparesWithoutPlaceholderAndRoundTripsTh
     ASSERT_TRUE(redoneIdentity);
     EXPECT_EQ(*redoneIdentity, *identity);
     expectBytes(created, after);
+    EXPECT_EQ(fs.readFileSnapshot(created, 65536), frost::Result<std::string>(after));
 }
 
 TEST_F(FileTransactionReplace, EmptyCreationIsAbsentBeforeRatherThanAnEmptyExistingFile) {
