@@ -946,6 +946,36 @@ TEST(LanguageControllerRefactoring, ShowIntentionsOpensRiderContextMenuAndNaviga
     EXPECT_EQ(host.opened[0].second, (fl::LspPosition{4, 2}));
 }
 
+TEST(LanguageControllerRefactoring, ShowIntentionsReportsAnUnavailableServerAndKeepsLocalActions) {
+    class StartingRequester final : public fl::ILspRequester {
+    public:
+        frost::sched::Task<frost::Result<Json>> request(std::string, Json, std::stop_token) override {
+            co_return frost::fail(frost::ErrorCode::Busy, "language server is starting");
+        }
+        fl::PositionEncoding encoding() const override { return fl::PositionEncoding::Utf16; }
+        std::optional<fl::ServerCapabilities> serverCapabilities() const override { return std::nullopt; }
+    } requester;
+    FeatureServer scheduler;
+    FakeHost host("int value = 1;\n");
+    RecordingApplier applier;
+    frost::io::MemFs fs(frost::systemClock());
+    LanguageController controller(frost::ui::lang::LanguageServices{.server = requester,
+                                                                    .scheduler = scheduler.scheduler(),
+                                                                    .host = host,
+                                                                    .applier = applier,
+                                                                    .fs = fs,
+                                                                    .diagnostics = {}});
+    QString status;
+    QObject::connect(&controller, &LanguageController::statusMessage,
+                     [&](const QString& message) { status = message; });
+    controller.showIntentions();
+    auto& choice = controller.choicePopup();
+    ASSERT_TRUE(pumpUntil([&] { return choice.isVisible(); }));
+    ASSERT_GT(choice.list()->count(), 0);
+    EXPECT_EQ(choice.list()->item(0)->text(), QStringLiteral("Go to Declaration or Usages"));
+    EXPECT_EQ(status, QStringLiteral("Language server unavailable for Context Actions"));
+}
+
 TEST(LanguageControllerRefactoring, ReformatAppliesTheServerEditsAsOneStep) {
     FeatureServer server;
     server.on("textDocument/formatting", [](const Json&) {

@@ -166,6 +166,7 @@ void LanguageController::showIntentions() {
             std::vector<QString> titles;
             std::vector<bool> preferred;
             std::vector<QString> disabledReasons;
+            const bool serverUnavailable = !actions && actions.error().code() == ErrorCode::Busy;
             m_choiceActions.clear();
             if (actions) {
                 for (fl::CodeActionItem& action : *actions) {
@@ -244,6 +245,8 @@ void LanguageController::showIntentions() {
             }
             m_choice->start(QStringLiteral("Context Actions"), titles, m_services.host.caretScreenRect(),
                             std::move(preferred), std::move(disabledReasons));
+            if (serverUnavailable)
+                emit statusMessage(QStringLiteral("Language server unavailable for Context Actions"));
         });
 }
 
