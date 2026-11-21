@@ -12,13 +12,16 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import io
 import json
 import random
 import subprocess
 import sys
+import tarfile
 import textwrap
 import unittest
+import zipfile
 from pathlib import Path
 from unittest import mock
 
@@ -249,6 +252,7 @@ sys.exit(1 if calls == control.get("fail_on_call") else 0)
 
 _FAKE_SCCACHE = r'''
 import sys
+import tarfile
 from pathlib import Path
 here = Path(__file__).resolve().parent
 counter = here / "sccache.count"
@@ -279,6 +283,7 @@ print("Verified: win debug 1/1, tidy ok (1 TUs)")
 
 _FAKE_WSL = r'''
 import sys
+import tarfile
 args = sys.argv[1:]
 if "--list" in args:
     sys.exit(0)
@@ -633,6 +638,118 @@ class EndToEndTest(TempDirTestCase):
         self.assertEqual(summary["variants"]["wsl-leg"]["verdict"], "info")
         self.assert_restored()
 
+
+
+class InstalledSizeTest(TempDirTestCase):
+    def fixture(self, missing: str | None = None, *, wrapped: bool = False) -> tuple[Path, Path]:
+        """Write one native portable archive and its matching expanded tree."""
+        ext = ".exe" if sys.platform == "win32" else ""
+        root = self.tmp / "expanded"
+        archive = self.tmp / ("package.zip" if ext else "package.tar.gz")
+        files = {
+            f"frost{ext}", f"frost-clang{ext}", f"frost-analyzer{ext}", "LICENSE", "NOTICE", "resources/editor",
+            f"llvm-23/bin/clangd{ext}", f"llvm-23/bin/clang-scan-deps{ext}",
+            f"llvm-23/bin/llvm-cov{ext}", f"llvm-23/bin/llvm-profdata{ext}",
+            "llvm-23/lib/clang/23/include/stddef.h",
+            f"lldb-23/bin/lldb-dap{ext}", f"lldb-23/bin/lldb-argdumper{ext}",
+            f"luals-3/bin/lua-language-server{ext}",
+        }
+        if ext:
+            files.update({"Qt6Core.dll", "Qt6Gui.dll", "Qt6Widgets.dll", "platforms/qwindows.dll",
+                          "lldb-23/bin/liblldb.dll"})
+        else:
+            files.update({"frost.bin", "qt/plugins/platforms/libqxcb.so", "lldb-23/lib/liblldb.so.23"})
+        files.discard(missing)
+        root.mkdir()
+        for name in sorted(files):
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(name.encode() * 512)
+        if ext:
+            with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as package:
+                for name in sorted(files):
+                    package.write(root / name, f"stage/{name}" if wrapped else name)
+        else:
+            link = root / "lldb-23/lib/liblldb.so"
+            link.symlink_to("liblldb.so.23")
+            with tarfile.open(archive, "w:gz") as package:
+                package.add(root, arcname="stage" if wrapped else ".")
+        return root, archive
+
+    def measure(self, root: Path, archive: Path, digest: str | None = None) -> tuple[int, str, str]:
+        output, errors = io.StringIO(), io.StringIO()
+        sha256 = hashlib.sha256(archive.read_bytes()).hexdigest()
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+            result = frost_perf.main(["--budget", "B27", "--package-dir", str(root), "--package-archive",
+                                      str(archive), "--package-sha256", digest or sha256])
+        return result, output.getvalue(), errors.getvalue()
+
+    def test_native_allocation_uses_the_existing_budget_and_includes_llvm(self) -> None:
+        root, archive = self.fixture()
+        code, out, err = self.measure(root, archive)
+        self.assertEqual(code, 0, err)
+        receipt = json.loads(out)
+        budget = frost_perf.load_budget(REPO / frost_perf.BUDGETS_FILE, "B27")
+        self.assertEqual(receipt["limitBytes"], budget.targets[0].max * 1_000_000)
+        self.assertGreater(receipt["allocatedBytes"], 0)
+        self.assertEqual(receipt["allocatedMB"], receipt["allocatedBytes"] / 1_000_000)
+        self.assertEqual(receipt["allocatedMiB"], receipt["allocatedBytes"] / 1_048_576)
+        files = [path for path in root.rglob("*") if path.is_file() and not path.is_symlink()]
+        self.assertEqual(receipt["regularFiles"], len(files))
+        self.assertEqual(receipt["logicalBytes"], sum(path.stat().st_size for path in files))
+        self.assertEqual(receipt["symlinks"], int(sys.platform != "win32"))
+
+    def test_native_archive_can_wrap_the_package_in_one_directory(self) -> None:
+        root, archive = self.fixture(wrapped=True)
+        code, out, err = self.measure(root, archive)
+        self.assertEqual(code, 0, err)
+        self.assertGreater(json.loads(out)["allocatedBytes"], 0)
+
+    def test_empty_directory_and_same_size_truncation_do_not_pass(self) -> None:
+        root, archive = self.fixture()
+        empty = self.tmp / "empty"
+        empty.mkdir()
+        self.assertEqual(self.measure(empty, archive)[0], 3)
+        app = root / ("frost.exe" if sys.platform == "win32" else "frost")
+        data = app.read_bytes()
+        app.write_bytes(b"x" + data[1:])
+        code, out, err = self.measure(root, archive)
+        self.assertEqual((code, out), (3, ""))
+        self.assertIn("bytes differ", err)
+
+    def test_archived_and_expanded_payload_without_llvm_is_invalid(self) -> None:
+        ext = ".exe" if sys.platform == "win32" else ""
+        root, archive = self.fixture(missing=f"llvm-23/bin/clangd{ext}")
+        code, out, err = self.measure(root, archive)
+        self.assertEqual((code, out), (3, ""))
+        self.assertIn("clangd", err)
+
+    def test_truncated_archive_cannot_claim_pass_with_a_matching_digest(self) -> None:
+        root, archive = self.fixture()
+        archive.write_bytes(archive.read_bytes()[:-5])
+        code, out, err = self.measure(root, archive)
+        self.assertEqual((code, out), (3, ""), err)
+
+    def test_empty_archive_with_empty_install_is_invalid(self) -> None:
+        root = self.tmp / "empty"
+        root.mkdir()
+        if sys.platform == "win32":
+            archive = self.tmp / "empty.zip"
+            with zipfile.ZipFile(archive, "w"):
+                pass
+        else:
+            archive = self.tmp / "empty.tar.gz"
+            with tarfile.open(archive, "w:gz"):
+                pass
+        code, out, err = self.measure(root, archive)
+        self.assertEqual((code, out), (3, ""))
+        self.assertIn("required payload", err)
+
+    def test_different_archive_identity_is_invalid(self) -> None:
+        root, archive = self.fixture()
+        code, out, err = self.measure(root, archive, "0" * 64)
+        self.assertEqual((code, out), (3, ""))
+        self.assertIn("SHA-256 differs", err)
 
 if __name__ == "__main__":
     unittest.main()

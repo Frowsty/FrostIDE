@@ -46,7 +46,13 @@ that loop faster; tidy and TSan are built but switched off.
    their dependents. Off by default (decision 9).
 6. **`tools/perf.ps1` and `tools/frost_perf.py`** take over ADR 0010's B28 harness: variants rebuild, noop,
    verify and wsl-leg; write-once results under `E:\FrostBuilds\perf\<milestone>\b28\`; a probe journal so a
-   killed run is restored with `perf.ps1 -Restore`.
+   killed run is restored with `perf.ps1 -Restore`. B27 uses `--budget B27 --package-dir <expanded root>
+   --package-archive <original ZIP or tar.gz> --package-sha256 <independently verified SHA-256>`.
+   Measure a fresh native extraction while no process is changing it. The runner compares the archive and
+   the installed inventory, requires the IDE and LLVM payload, and checks every regular file's bytes.
+   Its JSON receipt separates compressed archive size, logical file bytes and allocated regular-file bytes.
+   The allocation measurement uses NTFS file allocation or Linux allocated blocks. It excludes
+   filesystem directory metadata. The budget uses SI MB (1,000,000 bytes); the receipt also reports MiB.
 7. **B28's verify runs pass `-Base HEAD`**, so tidy and TSan (when switched on) see only the probe change.
 8. **Anchored label filters** (`-LE '^stress$'`, `-L '^fuzz$'`, since `mod.fuzz` exists), and the WSL summary
    split and join keep an item's own ", " inside parentheses.

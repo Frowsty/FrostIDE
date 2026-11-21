@@ -12,8 +12,7 @@
 #
 # Options take the PowerShell spelling (-Budget), the GNU spelling (--budget) or any case; comma
 # lists ("rebuild,noop", which `-File` passes as one string) are split here. Each harness reads
-# its targets and method from tests/perf/budgets.json; only B28 has a harness so far (ADR 0010,
-# ADR 0027). -List prints every budget with its gate and whether it has a harness.
+# its targets and method from tests/perf/budgets.json; B28 measures timing and B27 measures installed storage. -List prints every budget with its gate and whether it has a harness.
 #
 # Results go to <PerfRoot>\<milestone>\<budget id, lower case>\<YYYYMMDDTHHMMSS>-<sha7>[-<label>]\
 # (write-once): conditions.json (machine, tools, git state), runs.jsonl (one record per timed run),
@@ -46,6 +45,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import gzip
 import hashlib
 import json
 import math
@@ -53,12 +53,15 @@ import os
 import platform
 import re
 import shutil
+import stat
 import statistics
 import subprocess
 import sys
+import tarfile
 import tempfile
 import threading
 import time
+import zipfile
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from fractions import Fraction
@@ -1173,6 +1176,221 @@ class B28Harness:
         return f"{name} {shown} info"
 
 
+
+@dataclass(frozen=True)
+class InstalledSize:
+    files: int
+    symlinks: int
+    logical_bytes: int
+    allocated_bytes: int
+
+
+def _package_path(name: str) -> str:
+    """Checks an archive member name before looking it up in the installed tree."""
+    parts = name.removeprefix("./").rstrip("/").split("/")
+    if any(part in ("", ".", "..") or ":" in part or "\\" in part for part in parts):
+        raise RunInvalid(f"unsafe package member {name!r}")
+    return "/".join(parts)
+
+
+def _installed_entries(root: Path) -> dict[str, os.stat_result]:
+    """Enumerates the on-disk names without descending into symlinks or Windows reparse points."""
+    entries = {}
+    directories = [root]
+    while directories:
+        path = directories.pop()
+        with os.scandir(path) as children:
+            for child in children:
+                info = child.stat(follow_symlinks=False)
+                relative = Path(child.path).relative_to(root).as_posix()
+                attributes = getattr(info, "st_file_attributes", 0)
+                if attributes & 0x400:  # FILE_ATTRIBUTE_REPARSE_POINT
+                    raise RunInvalid(f"Windows package contains a reparse point: {relative}")
+                if stat.S_ISDIR(info.st_mode):
+                    directories.append(Path(child.path))
+                elif stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
+                    entries[relative] = info
+                else:
+                    raise RunInvalid(f"unsupported installed entry: {relative}")
+    return entries
+
+
+def _windows_allocation(file: Any) -> int:
+    """Reads FILE_STANDARD_INFO for the exact open payload and returns its AllocationSize."""
+    import msvcrt
+    from ctypes import wintypes
+
+    class FileStandardInfo(ctypes.Structure):
+        _fields_ = [("allocation_size", ctypes.c_int64), ("end_of_file", ctypes.c_int64),
+                    ("links", wintypes.DWORD), ("delete_pending", ctypes.c_ubyte),
+                    ("directory", ctypes.c_ubyte)]
+
+    query = ctypes.WinDLL("kernel32", use_last_error=True).GetFileInformationByHandleEx
+    query.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+    query.restype = wintypes.BOOL
+    info = FileStandardInfo()
+    if not query(msvcrt.get_osfhandle(file.fileno()), 1, ctypes.byref(info), ctypes.sizeof(info)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    if info.directory or info.delete_pending:
+        raise RunInvalid("opened installed payload is not a stable regular file")
+    if info.links != 1:
+        raise RunInvalid("installed package has a hard-linked file")
+    if info.allocation_size < 0:
+        raise RunInvalid("Windows reported a negative file allocation")
+    return info.allocation_size
+
+
+def _measure_package(layout: Path, archive_file: Any, archive_name: str) -> InstalledSize:
+    """Matches the installed inventory and bytes to the verified portable archive."""
+    entries = _installed_entries(layout)
+    remaining = set(entries)
+    member_names = set()
+    prefix = None
+    files = links = logical = allocated = 0
+
+    def member(name: str, directory: bool) -> str | None:
+        nonlocal prefix
+        if directory and name.rstrip("/") == ".":
+            return None
+        relative = _package_path(name)
+        if relative in member_names:
+            raise RunInvalid(f"duplicate package member: {relative}")
+        member_names.add(relative)
+        if directory:
+            return None
+        if prefix is None:
+            # Portable archives can wrap all files in one top-level directory.
+            folder, separator, inner = relative.partition("/")
+            prefix = f"{folder}/" if relative not in remaining and separator and inner in remaining else ""
+        if not relative.startswith(prefix):
+            raise RunInvalid(f"portable archive mixes package roots: {relative}")
+        relative = relative.removeprefix(prefix)
+        if relative not in remaining:
+            raise RunInvalid(f"installed package is missing {relative}")
+        remaining.remove(relative)
+        return relative
+
+    def regular(relative: str, source: Any, size: int) -> None:
+        nonlocal files, logical, allocated
+        expected = entries[relative]
+        if not stat.S_ISREG(expected.st_mode) or expected.st_size != size:
+            raise RunInvalid(f"installed file type or size differs: {relative}")
+        if os.name != "nt" and expected.st_nlink != 1:
+            raise RunInvalid(f"installed package has a hard-linked file: {relative}")
+        if getattr(expected, "st_file_attributes", 0) & 0xA00:  # SPARSE_FILE | COMPRESSED
+            raise RunInvalid(f"installed package has a compressed or sparse file: {relative}")
+        with (layout / relative).open("rb") as installed:
+            opened = os.fstat(installed.fileno())
+            if expected.st_size != opened.st_size or (os.name != "nt" and not os.path.samestat(expected, opened)):
+                raise RunInvalid(f"installed file changed during measurement: {relative}")
+            if hashlib.file_digest(source, "sha256").digest() != hashlib.file_digest(installed, "sha256").digest():
+                raise RunInvalid(f"installed file bytes differ: {relative}")
+            allocation = _windows_allocation(installed) if os.name == "nt" else opened.st_blocks * 512
+            if os.name != "nt" and allocation < size:
+                raise RunInvalid(f"installed package has an underallocated file: {relative}")
+        files += 1
+        logical += size
+        allocated += allocation
+
+    if archive_name.endswith(".zip"):
+        with zipfile.ZipFile(archive_file) as package:
+            for item in package.infolist():
+                relative = member(item.filename, item.is_dir())
+                if relative is not None:
+                    mode = item.external_attr >> 16
+                    if stat.S_IFMT(mode) not in (0, stat.S_IFREG):
+                        raise RunInvalid(f"unsupported ZIP member: {relative}")
+                    with package.open(item) as source:
+                        regular(relative, source, item.file_size)
+    else:
+        with gzip.GzipFile(fileobj=archive_file) as compressed, tarfile.open(fileobj=compressed, mode="r|") as package:
+            for item in package:
+                relative = member(item.name, item.isdir())
+                if relative is None:
+                    continue
+                if item.isreg():
+                    with package.extractfile(item) as source:
+                        regular(relative, source, item.size)
+                elif item.issym() and stat.S_ISLNK(entries[relative].st_mode):
+                    link = layout / relative
+                    if (os.readlink(link) != item.linkname or Path(item.linkname).is_absolute()
+                            or not link.resolve(strict=True).is_relative_to(layout)):
+                        raise RunInvalid(f"installed symlink differs or leaves the package: {relative}")
+                    links += 1
+                else:
+                    raise RunInvalid(f"unsupported or mismatched tar member: {relative}")
+            while compressed.read(1 << 20):
+                pass  # Validate the gzip trailer even after reaching tar end-of-archive.
+
+    if remaining:
+        raise RunInvalid(f"installed package has an extra entry: {min(remaining)}")
+    _require_package_payload(entries, archive_name.endswith(".zip"))
+    return InstalledSize(files, links, logical, allocated)
+
+
+def _require_package_payload(entries: dict[str, os.stat_result], windows: bool) -> None:
+    """Requires the portable application's common runtime, resources and LLVM payload anchors."""
+    ext = ".exe" if windows else ""
+    regular = {name for name, info in entries.items() if stat.S_ISREG(info.st_mode) and info.st_size}
+    mandatory = {f"frost{ext}", f"frost-clang{ext}", f"frost-analyzer{ext}", "LICENSE", "NOTICE"}
+    if windows:
+        mandatory.update(("Qt6Core.dll", "Qt6Gui.dll", "Qt6Widgets.dll", "platforms/qwindows.dll"))
+    else:
+        mandatory.update(("frost.bin", "qt/plugins/platforms/libqxcb.so"))
+    if missing := mandatory - regular:
+        raise RunInvalid(f"package is missing required payload: {min(missing)}")
+    for pattern in (r"resources/.+", rf"llvm-[^/]+/bin/clangd{re.escape(ext)}",
+                    rf"llvm-[^/]+/bin/clang-scan-deps{re.escape(ext)}",
+                    rf"llvm-[^/]+/bin/llvm-cov{re.escape(ext)}", rf"llvm-[^/]+/bin/llvm-profdata{re.escape(ext)}",
+                    r"llvm-[^/]+/lib/clang/[^/]+/include/.+", rf"lldb-[^/]+/bin/lldb-dap{re.escape(ext)}",
+                    rf"lldb-[^/]+/bin/lldb-argdumper{re.escape(ext)}",
+                    rf"luals-[^/]+/bin/lua-language-server{re.escape(ext)}",
+                    r"lldb-[^/]+/bin/liblldb\.dll" if windows else r"lldb-[^/]+/lib/liblldb\.so\..+"):
+        if not any(re.fullmatch(pattern, name) for name in regular):
+            raise RunInvalid(f"package is missing required payload matching {pattern}")
+
+
+def cmd_installed_size(budget: Budget, args: argparse.Namespace) -> int:
+    """Runs B27 once against an existing expanded package and independently verified ZIP/tar.gz."""
+    if not args.package_dir or not args.package_archive or not args.package_sha256:
+        raise PerfError("B27 requires --package-dir, --package-archive and --package-sha256")
+    if any(getattr(args, option) is not None for option in
+           ("variant", "runs", "warmup", "files", "build_dir", "lock_record", "perf_root", "milestone", "label")):
+        raise PerfError("B27 measures one installed package and emits its record on stdout")
+    archive = Path(args.package_archive).absolute()
+    suffix = archive.name.casefold()
+    if not (suffix.endswith(".zip") if os.name == "nt" else suffix.endswith((".tar.gz", ".tgz"))):
+        raise PerfError("B27 requires a Windows ZIP or a Linux tar.gz on its native OS")
+    if not re.fullmatch(r"[a-fA-F0-9]{64}", args.package_sha256):
+        raise PerfError("B27 requires a 64-hex-digit independently verified archive SHA-256")
+    if len(budget.targets) != 1 or budget.targets[0].unit != "MB":
+        raise PerfError("B27 requires one MB limit in budgets.json")
+    limit = int(Fraction(str(budget.targets[0].max)) * 1_000_000)
+    layout = Path(args.package_dir).absolute()
+    try:
+        root_info = layout.lstat()
+        if not stat.S_ISDIR(root_info.st_mode) or getattr(root_info, "st_file_attributes", 0) & 0x400:
+            raise RunInvalid("installed root is not a native directory")
+        layout = layout.resolve(strict=True)
+        with archive.open("rb") as file:
+            digest = hashlib.file_digest(file, "sha256").hexdigest()
+            if digest != args.package_sha256.lower():
+                raise RunInvalid("portable archive SHA-256 differs from the independently verified value")
+            file.seek(0)
+            size = _measure_package(layout, file, suffix)
+            archive_bytes = os.fstat(file.fileno()).st_size
+    except (RunInvalid, OSError, EOFError, ValueError, RuntimeError, tarfile.TarError, zipfile.BadZipFile) as error:
+        print(f"perf: B27 invalid: {error}", file=sys.stderr)
+        return EXIT_INVALID
+    passed = size.allocated_bytes <= limit
+    print(json.dumps({"budget": budget.id, "verdict": "pass" if passed else "over",
+                      "installedRoot": str(layout), "archive": str(archive), "archiveSha256": digest,
+                      "archiveBytes": archive_bytes, "regularFiles": size.files, "symlinks": size.symlinks,
+                      "logicalBytes": size.logical_bytes, "allocatedBytes": size.allocated_bytes,
+                      "allocatedMB": size.allocated_bytes / 1_000_000,
+                      "allocatedMiB": size.allocated_bytes / 1_048_576, "limitBytes": limit}, indent=2))
+    return EXIT_OK if passed else EXIT_OVER
+
 HARNESSES: dict[str, type] = {"B28": B28Harness}
 
 
@@ -1181,7 +1399,7 @@ HARNESSES: dict[str, type] = {"B28": B28Harness}
 # ---------------------------------------------------------------------------------------------
 
 _OPTIONS = ("list", "budget", "variant", "runs", "warmup", "files", "label", "perf-root", "milestone",
-            "build-dir", "restore", "lock-record", "repo")
+            "build-dir", "restore", "lock-record", "repo", "package-dir", "package-archive", "package-sha256")
 _FLAGS = {"list"}
 
 
@@ -1221,6 +1439,9 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--build-dir", help="the Debug build tree (default build\\win-clangcl)")
     parser.add_argument("--restore", help="restore the probe journal of an interrupted run directory and exit")
     parser.add_argument("--lock-record", help="a file holding night.py measure-begin's JSON line, for conditions.json")
+    parser.add_argument("--package-dir", help="existing expanded portable package root (B27)")
+    parser.add_argument("--package-archive", help="original ZIP or tar.gz on the native platform (B27)")
+    parser.add_argument("--package-sha256", help="independently verified SHA-256 of that archive (B27)")
     parser.add_argument("--repo", help=argparse.SUPPRESS)
     return parser.parse_args(_normalise(argv))
 
@@ -1245,7 +1466,7 @@ def cmd_list(budgets_json: Path) -> int:
     """Prints every budget: ID, metric, gate and whether a harness exists. Returns 0."""
     for entry in load_budgets(budgets_json):
         gate = ", ".join(str(g.get("milestone")) for g in entry.get("gate", []))
-        harness = "harness" if entry.get("id") in HARNESSES else "no harness"
+        harness = "harness" if entry.get("id") in HARNESSES or entry.get("id") == "B27" else "no harness"
         print(f"{entry.get('id'):4} gate {gate:9} {harness:10}  {entry.get('metric')}")
     return EXIT_OK
 
@@ -1286,6 +1507,10 @@ def _run(args: argparse.Namespace, injected: Tools | None, hooks: Hooks) -> int:
         return cmd_restore(Path(args.restore))
 
     budget = load_budget(budgets_json, args.budget)
+    if budget.id == "B27":
+        return cmd_installed_size(budget, args)
+    if args.package_dir or args.package_archive or args.package_sha256:
+        raise PerfError("package arguments require --budget B27")
     harness_type = HARNESSES.get(budget.id)
     if harness_type is None:
         raise PerfError(f"{budget.id} has no harness yet; harnessed budgets: {', '.join(sorted(HARNESSES))}")
