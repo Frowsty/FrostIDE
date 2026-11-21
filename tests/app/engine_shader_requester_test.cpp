@@ -35,7 +35,8 @@ TEST(EngineShaderRequester, OneDispatcherCanRunDelayedReplyAndReleaseLease) {
     ASSERT_TRUE(request.ready());
     auto result = request.join();
     ASSERT_TRUE(result);
-    EXPECT_EQ(result->asString(), "actual delayed response");
+    ASSERT_NE(result->asString(), nullptr);
+    EXPECT_EQ(*result->asString(), "actual delayed response");
     EXPECT_TRUE(resources->tryAcquireHeavyLeg(frost::sched::HeavyLegKind::Inspection));
 }
 TEST(EngineShaderRequester, CancellationStopsActualDispatchTokenAndLateReplyDoesNotResumeAgain) {

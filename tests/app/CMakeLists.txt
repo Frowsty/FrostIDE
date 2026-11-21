@@ -22,12 +22,17 @@
 # only ever run one at a time. frost_process_tests also counts as 2 of ctest's -j slots (each case
 # runs frost.exe beside the test). app_tests runs offscreen Qt only and takes no lock.
 
+set(_frost_workbench_definitions
+    FROST_BUILD_FIXTURES="${FROST_SOURCE_DIR}/tests/build/fixtures"
+    FROST_APP_WORK_ROOT="${CMAKE_CURRENT_BINARY_DIR}/workbench-work")
+
 frost_add_test(app_tests QT
     SOURCES command_line_test.cpp main_window_test.cpp stable_lsp_requester_test.cpp stall_hooks_test.cpp workbench_project_helpers_test.cpp cmake_kit_test.cpp standalone_build_backend_test.cpp unreal_build_backend_test.cpp unreal_partner_window_test.cpp settings_import_test.cpp agent_bridge_test.cpp engine_shader_requester_test.cpp hosting_cli_test.cpp hosting_review_test.cpp native_agent_chat_test.cpp agent_private_test.cpp managed_tools_window_test.cpp unity_events_test.cpp unity_tests_window_test.cpp dxc_profile_test.cpp
     DEPS frost::app frost::diag frost::io)
 target_link_libraries(app_tests PRIVATE Qt6::Network)
 add_dependencies(app_tests frostide_mcp)
-target_compile_definitions(app_tests PRIVATE FROST_MCP_PROXY_PATH="$<TARGET_FILE:frostide_mcp>")
+target_compile_definitions(app_tests PRIVATE ${_frost_workbench_definitions}
+    FROST_MCP_PROXY_PATH="$<TARGET_FILE:frostide_mcp>")
 # tests/support/scratch_dir.hpp (the persistent services' data directory).
 target_include_directories(app_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/app/src)
 
@@ -93,9 +98,6 @@ add_dependencies(frost_process_tests crash_child)
 # no real tool (label unit); app_workbench_msbuild_tests (Windows) and app_workbench_clangd_tests run
 # the real MSBuild and clangd (label integration, so RESOURCE_LOCK frost_desktop, with the tags
 # msbuild and clangd; ADR 0027).
-set(_frost_workbench_definitions
-    FROST_BUILD_FIXTURES="${FROST_SOURCE_DIR}/tests/build/fixtures"
-    FROST_APP_WORK_ROOT="${CMAKE_CURRENT_BINARY_DIR}/workbench-work")
 frost_add_test(app_workbench_tests QT
     SOURCES workbench_test.cpp workbench_lua_runtime_test.cpp workbench_refactoring_test.cpp workbench_terminal_test.cpp engine_locator_test.cpp engine_native_debug_test.cpp workbench_find_test.cpp workbench_editor_extras_test.cpp project_edit_process_test.cpp update_check_test.cpp update_readiness_test.cpp update_state_test.cpp
             multi_session_debug_test.cpp engine_unit_tests_window_test.cpp

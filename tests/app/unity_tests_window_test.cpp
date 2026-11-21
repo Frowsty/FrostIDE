@@ -187,7 +187,8 @@ TEST(UnityTestsWindow, RunReceiptMustMatchRequestedExecutionInReplyAndRecovery) 
             identity.instance = std::string(32, 'd');
             identity.session = std::string(32, 'e');
             identity.generation = 1;
-            identity.epoch = std::make_shared<std::atomic_uint64_t>(0);
+            auto epoch = std::make_shared<std::atomic_uint64_t>(0);
+            identity.epoch = epoch;
             identity.tests = true;
             struct Request {
                 lang::Json payload;
@@ -234,7 +235,7 @@ TEST(UnityTestsWindow, RunReceiptMustMatchRequestedExecutionInReplyAndRecovery) 
                 receipt.set("ok", false);
 
             if (recover) {
-                identity.epoch->store(1);
+                epoch->store(1);
                 identity.revision = 1;
                 identity.generation = 2;
                 identity.session = std::string(32, 'f');

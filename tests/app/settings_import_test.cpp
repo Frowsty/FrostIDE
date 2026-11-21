@@ -32,7 +32,7 @@ TEST(SettingsImport, PreviewWritesNothingAndConditionalApplyIsAtomicAndReloadabl
     ManualClock clock;
     io::MemFs fs(clock, io::PathStyle::Posix);
     ASSERT_TRUE(fs.createDirectories("/settings"));
-    settings::SettingsPaths paths{.applicationFile = "/settings/settings.json"};
+    settings::SettingsPaths paths{.applicationFile = "/settings/settings.json", .project = {}};
     const settings::StoreOptions options{.style = io::PathStyle::Posix};
     auto store = settings::SettingsStore::open(settings::builtinRegistry(), fs, paths, options).value();
     auto imported = parseVisualStudioSettings(fixture).value();
@@ -57,7 +57,7 @@ TEST(SettingsImport, NativeSchemeRoundTripsAndRejectsUnrelatedOrInvalidMembers) 
     ManualClock clock;
     io::MemFs fs(clock, io::PathStyle::Posix);
     ASSERT_TRUE(fs.createDirectories("/native"));
-    settings::SettingsPaths paths{.applicationFile = "/native/settings.json"};
+    settings::SettingsPaths paths{.applicationFile = "/native/settings.json", .project = {}};
     const settings::StoreOptions options{.style = io::PathStyle::Posix};
     auto store = settings::SettingsStore::open(settings::builtinRegistry(), fs, paths, options).value();
     ASSERT_TRUE(store->set(settings::Scope::Application, settings::key::editorFontSize, std::int64_t{17}));
@@ -88,7 +88,7 @@ TEST(SettingsImport, NativeSchemeRejectsIneffectiveColorsAndMalformedShortcuts) 
     ManualClock clock;
     io::MemFs fs(clock, io::PathStyle::Posix);
     ASSERT_TRUE(fs.createDirectories("/validated"));
-    settings::SettingsPaths paths{.applicationFile = "/validated/settings.json"};
+    settings::SettingsPaths paths{.applicationFile = "/validated/settings.json", .project = {}};
     auto store =
         settings::SettingsStore::open(settings::builtinRegistry(), fs, paths, {.style = io::PathStyle::Posix}).value();
     for (auto color : {"not-a-color", "#00112200"}) {

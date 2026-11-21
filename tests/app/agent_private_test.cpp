@@ -27,9 +27,12 @@ TEST(AgentPrivateFile, CreateNewNeverOverwritesAndReaderRejectsHardLinks) {
     const auto read = frost::app::readAgentPrivateFile(path);
     ASSERT_TRUE(read);
     EXPECT_EQ(*read, "private fixture");
+    const auto source = frost::io::toStdPath(path);
+    const auto alias = frost::io::toStdPath(directory + "/alias.discovery.json");
+    ASSERT_TRUE(source);
+    ASSERT_TRUE(alias);
     std::error_code error;
-    std::filesystem::create_hard_link(frost::io::toStdPath(path),
-                                      frost::io::toStdPath(directory + "/alias.discovery.json"), error);
+    std::filesystem::create_hard_link(*source, *alias, error);
     ASSERT_FALSE(error) << error.message();
     EXPECT_FALSE(frost::app::readAgentPrivateFile(path));
     EXPECT_FALSE(frost::app::readAgentPrivateFile(directory + "/alias.discovery.json"));

@@ -13,9 +13,22 @@
 namespace frost::app {
 namespace {
 std::string at(std::string_view name = {}) {
-    return io::joinPath(io::kNativePathStyle == io::PathStyle::Windows ? "C:/unreal-test" : "/unreal-test", name)
-        .value();
+    const std::string root = io::kNativePathStyle == io::PathStyle::Windows ? "C:\\unreal-test" : "/unreal-test";
+    return name.empty() ? root : io::joinPath(root, name).value();
 }
+project::UnrealProject oracleProject() {
+    project::UnrealProject project;
+    project.projectFile = at("Oracle.uproject");
+    return project;
+}
+build::UnrealBuildRequest oracleBuild() {
+    build::UnrealBuildRequest request;
+    request.tool = at("UBT");
+    request.projectFile = at("Oracle.uproject");
+    request.target = "OracleEditor";
+    return request;
+}
+
 bool pump(const std::function<bool()>& ready) {
     QElapsedTimer elapsed;
     elapsed.start();
@@ -32,16 +45,15 @@ TEST(UnrealBuildBackend, ConfigurationAndOpenNeverLaunchAndCancelledSaveDropsLat
     ASSERT_TRUE(trust);
     ASSERT_TRUE((*trust)->trust(at()));
     auto admission = build::BuildService::create(fs, launcher, **trust);
-    UnrealBuildBackend backend({.projectFile = at("Oracle.uproject")}, fs, launcher, **trust, *admission);
-    build::UnrealBuildRequest request{
-        .tool = at("UBT"), .projectFile = at("Oracle.uproject"), .target = "OracleEditor"};
+    UnrealBuildBackend backend(oracleProject(), fs, launcher, **trust, *admission);
+    auto request = oracleBuild();
     ASSERT_TRUE(backend.configure(request));
     EXPECT_TRUE(launcher.launches().empty());
     build::SaveAllCompletion complete;
     backend.setSaveAllHook([&](auto done) { complete = std::move(done); });
     ASSERT_TRUE(backend.build(build::BuildAction::Build, {}));
     EXPECT_EQ(backend.state(), build::BuildState::SavingDocuments);
-    EXPECT_FALSE(admission->reserveRun());
+    EXPECT_FALSE(admission->reserveExternalLaunch());
     backend.cancel();
     complete({});
     QCoreApplication::processEvents();
@@ -60,8 +72,8 @@ TEST(UnrealBuildBackend, TrustRevocationDuringSavePreventsUbtAndFailureUsesActua
     std::optional<build::BuildOutcome> outcome;
     build::BuildServiceCallbacks callbacks;
     callbacks.onFinished = [&](const auto& value) { outcome = value; };
-    UnrealBuildBackend backend({.projectFile = at("Oracle.uproject")}, fs, launcher, **trust, *admission, callbacks);
-    ASSERT_TRUE(backend.configure({.tool = at("UBT"), .projectFile = at("Oracle.uproject"), .target = "OracleEditor"}));
+    UnrealBuildBackend backend(oracleProject(), fs, launcher, **trust, *admission, callbacks);
+    ASSERT_TRUE(backend.configure(oracleBuild()));
     build::SaveAllCompletion complete;
     backend.setSaveAllHook([&](auto done) { complete = std::move(done); });
     ASSERT_TRUE(backend.build(build::BuildAction::Build, {}));
@@ -90,8 +102,8 @@ TEST(UnrealBuildBackend, RevokeAndRegrantDuringSaveDoesNotRestoreOldOperationAut
     std::optional<build::BuildOutcome> outcome;
     build::BuildServiceCallbacks callbacks;
     callbacks.onFinished = [&](const auto& value) { outcome = value; };
-    UnrealBuildBackend backend({.projectFile = at("Oracle.uproject")}, fs, launcher, **trust, *admission, callbacks);
-    ASSERT_TRUE(backend.configure({.tool = at("UBT"), .projectFile = at("Oracle.uproject"), .target = "OracleEditor"}));
+    UnrealBuildBackend backend(oracleProject(), fs, launcher, **trust, *admission, callbacks);
+    ASSERT_TRUE(backend.configure(oracleBuild()));
     build::SaveAllCompletion complete;
     backend.setSaveAllHook([&](auto done) { complete = std::move(done); });
     ASSERT_TRUE(backend.build(build::BuildAction::Build, {}));
@@ -114,8 +126,8 @@ TEST(UnrealBuildBackend, ActiveChildIsCancelledWhenTrustRevisionChanges) {
     std::optional<build::BuildOutcome> outcome;
     build::BuildServiceCallbacks callbacks;
     callbacks.onFinished = [&](const auto& value) { outcome = value; };
-    UnrealBuildBackend backend({.projectFile = at("Oracle.uproject")}, fs, launcher, **trust, *admission, callbacks);
-    ASSERT_TRUE(backend.configure({.tool = at("UBT"), .projectFile = at("Oracle.uproject"), .target = "OracleEditor"}));
+    UnrealBuildBackend backend(oracleProject(), fs, launcher, **trust, *admission, callbacks);
+    ASSERT_TRUE(backend.configure(oracleBuild()));
     launcher.expect({.expectExecutable = at("UBT"), .neverExits = true});
     ASSERT_TRUE(backend.build(build::BuildAction::Build, {}));
     ASSERT_TRUE(pump([&] { return backend.state() == build::BuildState::Running; }));
@@ -125,6 +137,9 @@ TEST(UnrealBuildBackend, ActiveChildIsCancelledWhenTrustRevisionChanges) {
     EXPECT_FALSE(outcome->succeeded());
     ASSERT_EQ(launcher.launches().size(), 1U);
     EXPECT_TRUE(launcher.launches().front().terminated);
+    auto next = admission->reserveExternalLaunch();
+    ASSERT_TRUE(next);
+    admission->releaseExternalLaunch(*next);
     EXPECT_TRUE(backend.diagnostics().empty());
 }
 
@@ -134,9 +149,8 @@ TEST(UnrealBuildBackend, ChangingUbtProfileClearsExplicitCompilationDatabaseWith
     auto trust = project::TrustStore::open(fs, at("trust.txt"));
     ASSERT_TRUE(trust);
     auto admission = build::BuildService::create(fs, launcher, **trust);
-    UnrealBuildBackend backend({.projectFile = at("Oracle.uproject")}, fs, launcher, **trust, *admission);
-    build::UnrealBuildRequest request{
-        .tool = at("UBT"), .projectFile = at("Oracle.uproject"), .target = "OracleEditor"};
+    UnrealBuildBackend backend(oracleProject(), fs, launcher, **trust, *admission);
+    auto request = oracleBuild();
     EXPECT_FALSE(backend.selectCompileDatabase(at("compile_commands.json")));
     ASSERT_TRUE(backend.configure(request));
     const auto identity = backend.configurationIdentity();
