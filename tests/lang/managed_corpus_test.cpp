@@ -10,12 +10,14 @@
 #include "frost/sched/thread_pool.hpp"
 
 #include "support/managed_profile_guard.hpp"
+#include "support/managed_service_shutdown.hpp"
 #include "support/scratch_dir.hpp"
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <filesystem>
 #include <set>
+#include <thread>
 namespace {
 using namespace frost;
 using namespace std::chrono_literals;
@@ -85,7 +87,7 @@ TEST(ManagedCorpus, ScratchCopyReportsDestinationCollision) {
     EXPECT_EQ(fs.readFile(scratch.join("source/Source.cs")).value(), "class Source {}");
 }
 
-TEST(ManagedCorpus, PinnedMoreLinqEvaluatesAndExposesTheSameSourceItemsThroughRealRoslyn) {
+TEST(ManagedCorpus, PinnedMoreLinqNet10ScratchEvaluatesBuildsAndExposesTheSameRoslynSourceItems) {
     ASSERT_TRUE(test::sdkTestMayStart()) << "SDK profile is not prepared";
     const auto env = [](const char* name) { return project::processEnvironmentVariable(name).value_or(""); };
     const auto root = env("FROST_CORPORA_ROOT"), dotnet = env("FROST_TEST_CSHARP_DOTNET"),
@@ -111,7 +113,7 @@ TEST(ManagedCorpus, PinnedMoreLinqEvaluatesAndExposesTheSameSourceItemsThroughRe
     const auto projectFile = io::joinPath(copy, "MoreLinq/MoreLinq.csproj").value();
     const auto projectDirectory = std::string(io::parentPath(projectFile));
     ASSERT_TRUE(
-        fs.writeFileAtomic(io::joinPath(projectDirectory, "global.json").value(),
+        fs.writeFileAtomic(io::joinPath(copy, "global.json").value(),
                            R"({"sdk":{"version":"10.0.403","rollForward":"disable","allowPrerelease":false}})"));
     ASSERT_TRUE(fs.writeFileAtomic(scratch.join("NuGet.Config"),
                                    "<configuration><packageSources><clear /></packageSources></configuration>"));
@@ -151,7 +153,18 @@ TEST(ManagedCorpus, PinnedMoreLinqEvaluatesAndExposesTheSameSourceItemsThroughRe
     ASSERT_TRUE(reactor);
     sched::ThreadPool pool(sched::ThreadPoolOptions{.workerCount = 2});
     lang::ManagedService service(io::realProcessLauncher(), {**reactor, pool}, options);
+    test::ManagedServiceShutdown shutdown{service, **reactor, pool};
     ASSERT_TRUE(service.start());
+    const auto deadline = std::chrono::steady_clock::now() + 45s;
+    while (service.state() != lang::LuaState::Running && service.state() != lang::LuaState::Failed &&
+           std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(50ms);
+    const auto startupError = service.lastError();
+    std::string startupOutput;
+    for (const auto& line : service.recentStderr())
+        startupOutput += line + '\n';
+    ASSERT_EQ(service.state(), lang::LuaState::Running) << (startupError ? startupError->describe() : "") << '\n'
+                                                        << startupOutput;
     auto model = pool.spawn(sched::Lane::UserVisible, ask(service, "frost/projectModel", lang::Json::object())).join();
     ASSERT_TRUE(model) << model.error().describe();
     ASSERT_TRUE(model->isArray());
@@ -166,15 +179,16 @@ TEST(ManagedCorpus, PinnedMoreLinqEvaluatesAndExposesTheSameSourceItemsThroughRe
         ASSERT_NE(full, item.metadata.end());
         EXPECT_TRUE(actual.contains(lang::documentKey(full->second))) << item.identity;
     }
-    pool.spawn(sched::Lane::UserVisible, service.stop()).join();
-    (*reactor)->shutdown();
-    pool.shutdown();
+    shutdown.stop();
     // Existing real REF1 journey supplies cross-project rename/Undo/Redo; corpus compilation is
     // an independent real compiler oracle over the exact evaluated selected framework.
     auto build = build::managedProjectBuildSpec(request);
     ASSERT_TRUE(build);
     build->environment = options.environment;
     build->arguments.push_back("--no-restore");
+    // The pinned corpus's SDK 9 style policy promotes SDK 10 analyzer additions to errors.
+    // This scratch-retargeted build checks compilation of the evaluated sources.
+    build->arguments.push_back("-p:EnforceCodeStyleInBuild=false");
     auto built = io::runToCompletion(io::realProcessLauncher(), *build, {}, 5min);
     ASSERT_TRUE(built);
     EXPECT_EQ(built->exitCode, 0) << built->stdoutBytes << built->stderrBytes;

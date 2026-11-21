@@ -72,7 +72,7 @@ function(frost_add_managed_fixture_test name)
         set(cases "\"ManagedE2E.InheritedProfilePreservesCustomNugetFeed\":[\"sdk\"],\n"
             "\"ManagedE2E.UnsavedCrossProjectUtf16NavigationAndRename\":[\"sdk\",\"server\"]")
     elseif(name STREQUAL "lang_managed_corpus_tests")
-        set(cases "\"ManagedCorpus.PinnedMoreLinqEvaluatesAndExposesTheSameSourceItemsThroughRealRoslyn\":[\"sdk\",\"server\"]")
+        set(cases "\"ManagedCorpus.PinnedMoreLinqNet10ScratchEvaluatesBuildsAndExposesTheSameRoslynSourceItems\":[\"sdk\",\"server\"]")
     elseif(name STREQUAL "build_managed_evaluation_tests")
         set(cases "\"ManagedEvaluationReal.EvaluatedItemsAndCompilerContextFollowActualSdkInnerBuilds\":[\"sdk\"]")
     elseif(name STREQUAL "build_managed_packages_tests")
