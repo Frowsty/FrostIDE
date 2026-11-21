@@ -3,6 +3,7 @@
 #include "frost/app/workbench.hpp"
 #include "frost/core/log.hpp"
 #include "frost/io/spawn_log.hpp"
+#include "frost/lang/cpp_index.hpp"
 #include "frost/lang/uri.hpp"
 #include "frost/ui/editor/editor_view.hpp"
 #include "frost/ui/lang/language_controller.hpp"
@@ -39,6 +40,7 @@ struct Capture {
     document::RefactoringPlan plan;
     lang::WorkspaceEdit targets;
     std::string database;
+    std::map<std::string, std::string> diskInputTargets;
     std::set<std::string> openPaths;
     std::uint64_t trustRevision = 0, generation = 0;
     std::shared_ptr<lang::ClangdService> server;
@@ -88,17 +90,18 @@ sched::Task<void> prepare(io::IFileSystem* fs, io::IProcessLauncher* launcher, p
             }
             capture->plan.bufferDependencies.push_back({found->path, found->contents});
         } else {
-            auto bytes = fs->readFileSnapshot(dependency.path, 64U * 1024U * 1024U);
-            if (!bytes || bytes->size() != dependency.bytes || io::sha256Hex(*bytes) != dependency.sha256) {
+            auto input = lang::readCppCompilerInput(*fs, dependency.path);
+            if (!input || input->bytes.size() != dependency.bytes || io::sha256Hex(input->bytes) != dependency.sha256) {
                 done(fail(ErrorCode::Busy, "Source input changed during AST analysis: " + dependency.path));
                 co_return;
             }
-            retained += bytes->size();
+            retained += input->bytes.size();
             if (retained > 512U * 1024U * 1024U) {
                 done(fail(ErrorCode::OutOfRange, "Refactoring snapshots exceed 512 MiB"));
                 co_return;
             }
-            capture->plan.dependencies.push_back({dependency.path, std::move(*bytes)});
+            capture->diskInputTargets.emplace(dependency.path, input->canonicalPath);
+            capture->plan.dependencies.push_back({std::move(input->canonicalPath), std::move(input->bytes)});
         }
     }
     for (const auto& path : proposal->missingDependencies)
@@ -212,6 +215,14 @@ void Workbench::prepareCppRefactoring(lang::CppRefactoringRequest request, std::
                     }
                     if (open != capture->openPaths)
                         return fail(ErrorCode::Busy, "Open document layout changed; request a new preview");
+                    for (const auto& [lexical, capturedTarget] : capture->diskInputTargets) {
+                        if (open.contains(lang::documentKey(lexical)))
+                            return fail(ErrorCode::Busy, "Disk input is now open in an editor");
+                        const auto currentTarget = self->m_services.fs.physicalPath(lexical);
+                        if (!currentTarget || *currentTarget != capturedTarget)
+                            return fail(ErrorCode::Busy,
+                                        "Compiler input target changed since the AST receipt: " + lexical);
+                    }
                     for (const auto& dependency : dependencies) {
                         if (open.contains(lang::documentKey(dependency.path)))
                             return fail(ErrorCode::Busy, "Disk input is now open in an editor");

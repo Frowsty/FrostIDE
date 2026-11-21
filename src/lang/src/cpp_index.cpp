@@ -12,6 +12,26 @@
 
 namespace frost::lang {
 namespace {
+constexpr auto kMaxCompilerInputBytes = 64U * 1024U * 1024U;
+Result<CppCompilerInput> readResolvedInput(io::IFileSystem& fs, std::string_view path, std::string target) {
+    auto bytes = fs.readFileSnapshot(target, kMaxCompilerInputBytes);
+    if (!bytes)
+        return std::unexpected(bytes.error());
+    const auto after = fs.physicalPath(path);
+    if (!after || *after != target)
+        return fail(ErrorCode::Busy, "Compiler dependency target changed while reading: " + std::string(path));
+    return CppCompilerInput{std::move(target), std::move(*bytes)};
+}
+} // namespace
+
+Result<CppCompilerInput> readCppCompilerInput(io::IFileSystem& fs, std::string_view path) {
+    auto target = fs.physicalPath(path);
+    if (!target)
+        return std::unexpected(target.error());
+    return readResolvedInput(fs, path, std::move(*target));
+}
+
+namespace {
 bool text(const Json& row, std::string_view key, std::size_t maximum = 32768) {
     const auto* value = row.find(key);
     return value && value->asString() && !value->asString()->empty() && value->asString()->size() <= maximum &&
@@ -31,19 +51,16 @@ char entryKind(io::FileType type) {
     return 'o';
 }
 Result<std::string> readIndexInput(io::IFileSystem& fs, std::string_view path) {
-    constexpr auto maximum = 64U * 1024U * 1024U;
-    auto bytes = fs.readFileSnapshot(path, maximum);
+    auto bytes = fs.readFileSnapshot(path, kMaxCompilerInputBytes);
     if (bytes || bytes.error().code() != ErrorCode::PermissionDenied)
         return bytes;
-    // The frontend can follow SDK symlinks. Recheck the resolved target around the strict snapshot read.
-    const auto target = fs.physicalPath(path);
+    auto target = fs.physicalPath(path);
     if (!target || *target == path)
         return bytes;
-    auto resolved = fs.readFileSnapshot(*target, maximum);
-    const auto after = fs.physicalPath(path);
-    if (!resolved || !after || *after != *target)
+    auto input = readResolvedInput(fs, path, std::move(*target));
+    if (!input)
         return fail(ErrorCode::Busy, "Index dependency target changed while reading");
-    return resolved;
+    return std::move(input->bytes);
 }
 } // namespace
 Result<CppIndexUnit> parseCppIndexUnit(std::string_view bytes) {

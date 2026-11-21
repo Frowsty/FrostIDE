@@ -24,16 +24,26 @@ using namespace std::chrono_literals;
 
 TEST(WorkbenchCppRefactoringJourney, NamedInlineActionsPreviewApplyCompileAndRefuseObservableIdentity) {
     WorkDir dir("cpp-inline-action"), recovery("cpp-inline-recovery");
-    const std::string before = "int main(){const int literal=2+3; const int observed=7; "
-                               "const int* pointer=&observed; return literal+*pointer;}\n";
+    const std::string before =
+#ifndef _WIN32
+        "#include \"compiler-input.hpp\"\n"
+#endif
+        "int main(){const int literal=2+3; const int observed=7; "
+        "const int* pointer=&observed; return literal+*pointer;}\n";
     dir.write("workspace/main.cpp", before);
+#ifndef _WIN32
+    constexpr std::string_view header = "// The two targets deliberately have identical contents.\n";
+    dir.write("headers/first.hpp", header);
+    dir.write("headers/second.hpp", header);
+    std::filesystem::create_symlink("first.hpp", dir.join("headers/compiler-input.hpp"));
+#endif
     const auto file = dir.join("workspace/main.cpp");
     const auto root = dir.join("workspace");
     const auto compiler = io::normalizePath(FROST_TEST_CXX_COMPILER).value();
 #ifdef _WIN32
     std::vector<std::string> arguments{compiler, "/std:c++20", "/EHsc", "/c", file};
 #else
-    std::vector<std::string> arguments{compiler, "-std=c++20", "-c", file};
+    std::vector<std::string> arguments{compiler, "-std=c++20", "-I", dir.join("headers"), "-c", file};
 #endif
     frost::test::appendPinnedCompilerArguments(arguments);
     const std::vector<lang::CompileCommand> commands{{root, file, std::move(arguments)}};
@@ -66,7 +76,20 @@ TEST(WorkbenchCppRefactoringJourney, NamedInlineActionsPreviewApplyCompileAndRef
     dismissWarning.start(1);
     const auto moveCaret = [&](std::string_view name) {
         rig.view()->widget()->setFocus();
-        rig.view()->goToLine(1, static_cast<int>(before.find(name) + 1));
+        rig.view()->editor().setState(text::EditorState::caretAt(ByteOffset{before.find(name)}));
+    };
+    const auto awaitPreview = [&] {
+        QDialogButtonBox* preview = nullptr;
+        const bool appeared = waitFor(
+            [&] {
+                for (auto* box : rig.window->findChildren<QDialogButtonBox*>())
+                    if (box->isVisible() && box->button(QDialogButtonBox::Apply))
+                        preview = box;
+                return preview || !refusal.isEmpty();
+            },
+            120s);
+        EXPECT_TRUE(appeared);
+        return preview;
     };
     const input::ActionContext context{.keys = input::ContextKeys{input::ContextKey::EditorFocus}, .trusted = true};
     for (const auto* id : {"refactor.inline", "refactor.cpp.inlineVariable"}) {
@@ -75,15 +98,7 @@ TEST(WorkbenchCppRefactoringJourney, NamedInlineActionsPreviewApplyCompileAndRef
         ASSERT_TRUE(action);
         moveCaret("literal");
         ASSERT_EQ(rig.workbench->registry().tryInvoke(*action, context), input::InvokeResult::Ran);
-        QDialogButtonBox* preview = nullptr;
-        ASSERT_TRUE(waitFor(
-            [&] {
-                for (auto* box : rig.window->findChildren<QDialogButtonBox*>())
-                    if (box->isVisible() && box->button(QDialogButtonBox::Apply))
-                        preview = box;
-                return preview || !refusal.isEmpty();
-            },
-            120s));
+        auto* preview = awaitPreview();
         ASSERT_NE(preview, nullptr) << refusal.toStdString();
         auto* dialog = preview->parentWidget();
         ASSERT_NE(dialog, nullptr);
@@ -112,7 +127,8 @@ TEST(WorkbenchCppRefactoringJourney, NamedInlineActionsPreviewApplyCompileAndRef
 #ifdef _WIN32
         compile.arguments = {"/std:c++20", "/EHsc", "/Zs", dir.join("workspace/compiled.cpp")};
 #else
-        compile.arguments = {"-std=c++20", "-fsyntax-only", dir.join("workspace/compiled.cpp")};
+        compile.arguments = {"-std=c++20", "-I", dir.join("headers"), "-fsyntax-only",
+                             dir.join("workspace/compiled.cpp")};
 #endif
         frost::test::appendPinnedCompilerArguments(compile.arguments);
         const auto result = io::runToCompletion(io::realProcessLauncher(), compile, {}, 30s);
@@ -122,9 +138,24 @@ TEST(WorkbenchCppRefactoringJourney, NamedInlineActionsPreviewApplyCompileAndRef
         EXPECT_EQ(rig.view()->editor().document().text().text(), before);
     }
 
-    moveCaret("observed");
     const auto action = rig.workbench->registry().find("refactor.inline");
     ASSERT_TRUE(action);
+#ifndef _WIN32
+    moveCaret("literal");
+    ASSERT_EQ(rig.workbench->registry().tryInvoke(*action, context), input::InvokeResult::Ran);
+    auto* preview = awaitPreview();
+    ASSERT_NE(preview, nullptr) << refusal.toStdString();
+    std::filesystem::create_symlink("second.hpp", dir.join("headers/retargeted.hpp"));
+    std::filesystem::rename(dir.join("headers/retargeted.hpp"), dir.join("headers/compiler-input.hpp"));
+    preview->button(QDialogButtonBox::Apply)->click();
+    ASSERT_TRUE(waitFor([&] { return !refusal.isEmpty(); }, 10s));
+    EXPECT_TRUE(refusal.contains(QStringLiteral("Compiler input target changed"))) << refusal.toStdString();
+    EXPECT_EQ(rig.view()->editor().document().text().text(), before);
+    EXPECT_EQ(dir.read("workspace/main.cpp"), before);
+    EXPECT_FALSE(rig.workbench->canUndoRefactoring());
+    refusal.clear();
+#endif
+    moveCaret("observed");
     ASSERT_EQ(rig.workbench->registry().tryInvoke(*action, context), input::InvokeResult::Ran);
     ASSERT_TRUE(waitFor([&] { return !refusal.isEmpty(); }, 120s));
     EXPECT_TRUE(refusal.contains(QStringLiteral("Variable identity/address is observable"))) << refusal.toStdString();

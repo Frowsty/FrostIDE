@@ -32,6 +32,13 @@ struct CppIndexQuery {
     bool truncated = false;
     std::vector<CppIndexUnit> receipts; // Exact query-time command receipts for later UI admission.
 };
+struct CppCompilerInput {
+    std::string canonicalPath;
+    std::string bytes;
+};
+// Read-only compiler inputs may use aliases. Capture their resolved path around a bounded,
+// no-follow read of the actual file so editor mutation paths never inherit this permission.
+[[nodiscard]] Result<CppCompilerInput> readCppCompilerInput(io::IFileSystem& fs, std::string_view path);
 [[nodiscard]] Result<CppIndexUnit> parseCppIndexUnit(std::string_view bytes);
 [[nodiscard]] sched::Task<Result<CppIndexUnit>> requestCppIndexUnit(io::IProcessLauncher& launcher,
                                                                     io::AsyncContext context, std::string helper,
