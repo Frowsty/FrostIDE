@@ -65,6 +65,29 @@ TEST(NativeCoverageReal, InstrumentedRunMatchesActualLlvmCovSourceCounts) {
     EXPECT_EQ(lines[0], (CoverageLine{1, 0}));
     EXPECT_EQ(lines[1], (CoverageLine{2, 1}));
     ASSERT_TRUE(report->files.front().identity);
+#ifdef _WIN32
+    const auto raw = fs.listDirectory(request.outputDirectory);
+    ASSERT_TRUE(raw);
+    request.execute = false;
+    for (const auto& entry : *raw)
+        if (entry.name.ends_with(".profraw"))
+            request.rawProfiles.push_back(io::joinPath(request.outputDirectory, entry.name).value());
+    ASSERT_EQ(request.rawProfiles.size(), 1U);
+    const auto otherSource = scratch.join("other.cpp");
+    const auto otherBinary = scratch.join("other.exe");
+    ASSERT_TRUE(fs.writeFileAtomic(otherSource, "int cold(){return 17;}\nint hot(){return 0;}\nint main(){return hot();}\n"));
+    compile.arguments[6] = otherSource;
+    compile.arguments.back() = otherBinary;
+    auto otherBuilt = runAnalysisCommand(io::realProcessLauncher(), compile, {});
+    ASSERT_TRUE(otherBuilt) << otherBuilt.error().describe();
+    ASSERT_EQ(otherBuilt->exitCode, 0) << otherBuilt->error;
+    request.plan.program = otherBinary;
+    request.outputDirectory = scratch.join("mismatched-session");
+    const auto mismatched = collectNativeCoverage(fs, io::realProcessLauncher(), request);
+    ASSERT_FALSE(mismatched);
+    EXPECT_EQ(mismatched.error().code(), ErrorCode::Corrupt);
+    EXPECT_NE(mismatched.error().message().find("does not name the selected COFF binary"), std::string::npos);
+#endif
     ASSERT_TRUE(fs.writeFileAtomic(source, "int edited;\n"));
     EXPECT_FALSE(validateAnalysisIdentity(fs, *report->files.front().identity));
 }

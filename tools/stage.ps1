@@ -202,7 +202,7 @@ $bundle = $Config -ne 'Debug' -or $BundleTools
 $llvmRel = "llvm-$($lock.windows.llvm.version)"
 $clangdSource = Join-Path $SdkRoot "$llvmRel\bin\clangd.exe"
 $scanDepsSource = Join-Path $SdkRoot "$llvmRel\bin\clang-scan-deps.exe"
-$coverageTools = @('llvm-cov.exe', 'llvm-profdata.exe')
+$coverageTools = @('llvm-cov.exe', 'llvm-profdata.exe', 'llvm-readobj.exe')
 $clangLibSource = Join-Path $SdkRoot "$llvmRel\lib\clang"
 $lldbRel = "lldb-$($lock.windows.lldb.version)"
 $lldbSourceDir = Join-Path $SdkRoot "$lldbRel\bin"
@@ -434,7 +434,7 @@ else {
     Write-Host 'stage: local Debug preview; dependency source/notice packaging was not requested'
 }
 if ($bundle) {
-    foreach ($name in @("$llvmRel\bin\llvm-cov.exe", "$llvmRel\bin\llvm-profdata.exe", "$llvmRel\bin\clangd.exe", "$llvmRel\bin\clang-scan-deps.exe", "$lldbRel\bin\lldb-dap.exe", "$lualsRel\bin\lua-language-server.exe",
+    foreach ($name in @("$llvmRel\bin\llvm-cov.exe", "$llvmRel\bin\llvm-profdata.exe", "$llvmRel\bin\llvm-readobj.exe", "$llvmRel\bin\clangd.exe", "$llvmRel\bin\clang-scan-deps.exe", "$lldbRel\bin\lldb-dap.exe", "$lualsRel\bin\lua-language-server.exe",
             'roslyn\FrostRoslynHost.dll', 'FrostManagedDebug\adapter\netcoredbg.exe', 'licenses\luals-LICENSE.txt')) {
         if (-not (Test-Path -LiteralPath (Join-Path $Destination $name) -PathType Leaf)) { Fail "the staged folder has no $name" }
     }

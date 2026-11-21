@@ -28,6 +28,102 @@ std::vector<std::string_view> fields(std::string_view text) {
 Result<std::string> sourcePath(std::string_view path, std::string_view directory) {
     return io::isAbsolutePath(path) ? io::normalizePath(path) : io::joinPath(directory, path);
 }
+#ifdef _WIN32
+std::string_view trimCoverageLine(std::string_view value) {
+    const auto start = value.find_first_not_of(" \t\r");
+    return start == value.npos ? std::string_view{} : value.substr(start, value.find_last_not_of(" \t\r") - start + 1);
+}
+
+std::string_view nextCoverageLine(std::string_view& input) {
+    const auto end = input.find('\n');
+    const auto line = trimCoverageLine(input.substr(0, end));
+    input = end == input.npos ? std::string_view{} : input.substr(end + 1);
+    return line;
+}
+
+bool isCoverageId(std::string_view value) {
+    return value.size() == 32 && std::ranges::all_of(value, [](char ch) {
+        return (ch >= '0' && ch <= '9') || (ch >= 'A' && ch <= 'F') || (ch >= 'a' && ch <= 'f');
+    });
+}
+
+char lowerHex(char ch) { return ch >= 'A' && ch <= 'F' ? static_cast<char>(ch - 'A' + 'a') : ch; }
+
+std::string_view missingCoffCoverageId(std::string_view message) {
+    constexpr std::string_view prefix = "Coverage tool failed or warned: error: failed to load coverage: '";
+    constexpr std::string_view separator = "': Missing binary ID: ";
+    const auto diagnostic = nextCoverageLine(message);
+    const auto pathEnd = diagnostic.rfind(separator);
+    if (!diagnostic.starts_with(prefix) || pathEnd == diagnostic.npos || pathEnd <= prefix.size())
+        return {};
+    const auto id = diagnostic.substr(pathEnd + separator.size());
+    if (!isCoverageId(id))
+        return {};
+    std::string_view line;
+    do {
+        line = nextCoverageLine(message);
+    } while (line.empty() && !message.empty());
+    if (line != "error: could not load coverage information")
+        return {};
+    while (!message.empty())
+        if (!nextCoverageLine(message).empty())
+            return {};
+    return id;
+}
+
+Result<std::string> coffCoverageId(std::string_view output) {
+    std::size_t coffFormats = 0, codeViews = 0, signatures = 0, guids = 0;
+    bool rsds = false;
+    std::string_view guid;
+    while (!output.empty()) {
+        const auto line = nextCoverageLine(output);
+        if (line.starts_with("Format: COFF-"))
+            ++coffFormats;
+        else if (line == "Type: CodeView (0x2)")
+            ++codeViews;
+        else if (line.starts_with("PDBSignature:")) {
+            ++signatures;
+            rsds = line == "PDBSignature: 0x53445352";
+        } else if (line.starts_with("PDBGUID: ")) {
+            ++guids;
+            guid = line.substr(9);
+        }
+    }
+    if (coffFormats != 1 || codeViews != 1 || signatures != 1 || guids != 1 || !rsds || guid.size() != 38 ||
+        guid.front() != '{' || guid.back() != '}' || guid[9] != '-' || guid[14] != '-' || guid[19] != '-' ||
+        guid[24] != '-')
+        return fail(ErrorCode::Unsupported, "Expected one COFF CodeView RSDS identifier");
+    std::string digits;
+    for (const char ch : guid.substr(1, 36))
+        if (ch != '-')
+            digits += lowerHex(ch);
+    if (!isCoverageId(digits) || std::ranges::all_of(digits, [](char ch) { return ch == '0'; }))
+        return fail(ErrorCode::Corrupt, "Invalid COFF CodeView RSDS identifier");
+    // llvm-profdata prints raw GUID bytes. readobj prints the first three fields in GUID text order.
+    std::string id;
+    for (const auto offset : {6U, 4U, 2U, 0U, 10U, 8U, 14U, 12U})
+        id.append(digits, offset, 2);
+    id += digits.substr(16);
+    return id;
+}
+
+Result<void> requireCoverageId(std::string_view output, std::string_view expected) {
+    bool found = false;
+    while (!output.empty()) {
+        if (nextCoverageLine(output) != "Binary IDs:")
+            continue;
+        found = true;
+        break;
+    }
+    const auto id = nextCoverageLine(output);
+    if (!found || !isCoverageId(id) || !std::ranges::equal(id, expected, {}, lowerHex))
+        return fail(ErrorCode::Corrupt, "Coverage profile does not name the selected COFF binary");
+    while (!output.empty())
+        if (!nextCoverageLine(output).empty())
+            return fail(ErrorCode::Unsupported, "Expected exactly one binary identifier in the coverage profile");
+    return {};
+}
+#endif
 } // namespace
 Result<void> validateAnalysisLlvmVersion(std::string_view banner, std::string_view expected) {
     const std::string marker = "LLVM version " + std::string(expected);
@@ -171,6 +267,9 @@ Result<CoverageReport> collectNativeCoverage(io::IFileSystem& fs, io::IProcessLa
     if (!physicalOutput)
         return std::unexpected(physicalOutput.error());
     std::optional<AnalysisFileIdentity> admittedBinary;
+#ifdef _WIN32
+    std::optional<AnalysisFileIdentity> admittedMergedProfile, admittedReadobj;
+#endif
     std::vector<AnalysisFileIdentity> admittedSources;
     const auto guarded = [&]() -> Result<void> {
         if (stop.stop_requested())
@@ -185,6 +284,12 @@ Result<CoverageReport> collectNativeCoverage(io::IFileSystem& fs, io::IProcessLa
             if (!valid)
                 return valid;
         }
+#ifdef _WIN32
+        for (const auto* supplemental : {&admittedMergedProfile, &admittedReadobj})
+            if (*supplemental)
+                if (auto valid = validateAnalysisIdentity(fs, **supplemental); !valid)
+                    return valid;
+#endif
         for (const auto& source : admittedSources) {
             auto valid = validateAnalysisIdentity(fs, source);
             if (!valid)
@@ -299,9 +404,60 @@ Result<CoverageReport> collectNativeCoverage(io::IFileSystem& fs, io::IProcessLa
     auto merged = command(request.llvmProfdata, std::move(args));
     if (!merged)
         return std::unexpected(merged.error());
-    auto actual =
-        command(request.llvmCov, {"export", "-format=lcov", "-num-threads=2", "-check-binary-ids", "-debuginfod=false",
-                                  "-instr-profile=" + *mergedPath, request.plan.program});
+    const auto exportProfile = [&](bool checkIds) {
+        return command(request.llvmCov,
+                       {"export", "-format=lcov", "-num-threads=2",
+                        checkIds ? "-check-binary-ids" : "-check-binary-ids=false", "-debuginfod=false",
+                        "-instr-profile=" + *mergedPath, request.plan.program});
+    };
+    auto actual = exportProfile(true);
+#ifdef _WIN32
+    // Pinned llvm-cov cannot match the raw CodeView GUID against its COFF object list. Fall back only
+    // for that error, and only after independent identity checks of the selected image and every profile.
+    const auto missingId = !actual && actual.error().code() == ErrorCode::IoError
+                               ? missingCoffCoverageId(actual.error().message())
+                               : std::string_view{};
+    if (!missingId.empty()) {
+        auto readobj = io::joinPath(io::parentPath(request.llvmCov), "llvm-readobj.exe");
+        if (!readobj)
+            return std::unexpected(readobj.error());
+        auto readobjIdentity = captureAnalysisIdentity(fs, *readobj);
+        if (!readobjIdentity)
+            return std::unexpected(readobjIdentity.error());
+        admittedReadobj = std::move(*readobjIdentity);
+        auto mergedIdentity = captureAnalysisIdentity(fs, *mergedPath);
+        if (!mergedIdentity)
+            return std::unexpected(mergedIdentity.error());
+        admittedMergedProfile = std::move(*mergedIdentity);
+        auto version = command(*readobj, {"--version"});
+        if (!version)
+            return std::unexpected(version.error());
+        if (auto valid = validateAnalysisLlvmVersion(*version, request.expectedLlvmVersion); !valid)
+            return std::unexpected(valid.error());
+        auto image = command(*readobj, {"--coff-debug-directory", request.plan.program});
+        if (!image)
+            return std::unexpected(image.error());
+        auto id = coffCoverageId(*image);
+        if (!id)
+            return std::unexpected(id.error());
+        const auto checkProfile = [&](const AnalysisFileIdentity& profile) -> Result<void> {
+            if (auto same = validateAnalysisIdentity(fs, profile); !same)
+                return same;
+            auto ids = command(request.llvmProfdata, {"show", "--binary-ids", profile.path});
+            if (!ids)
+                return std::unexpected(ids.error());
+            return requireCoverageId(*ids, *id);
+        };
+        for (const auto& profile : profileIdentities)
+            if (auto matched = checkProfile(profile); !matched)
+                return std::unexpected(matched.error());
+        if (auto matched = checkProfile(*admittedMergedProfile); !matched)
+            return std::unexpected(matched.error());
+        if (!std::ranges::equal(missingId, *id, {}, lowerHex))
+            return std::unexpected(actual.error());
+        actual = exportProfile(false);
+    }
+#endif
     if (!actual)
         return std::unexpected(actual.error());
     auto files = parseLlvmCoverage(*actual, request.compilationDirectory);
@@ -309,7 +465,7 @@ Result<CoverageReport> collectNativeCoverage(io::IFileSystem& fs, io::IProcessLa
         return std::unexpected(files.error());
     if (files->size() != baseline->size())
         return fail(ErrorCode::Busy, "Coverage file mapping changed");
-    if (auto same = validateAnalysisIdentity(fs, *binary); !same)
+    if (auto same = guarded(); !same)
         return std::unexpected(same.error());
     for (const auto& identity : profileIdentities)
         if (auto same = validateAnalysisIdentity(fs, identity); !same)

@@ -250,7 +250,7 @@ class StageScriptTest(TempDirTestCase):
         sdk = self.tmp / "sdk"
         llvm = f"llvm-{lock['llvm']['version']}"
         llvm_major = lock["llvm"]["version"].split(".")[0]
-        files = [f"{llvm}/bin/{tool}.exe" for tool in ("clangd", "clang-scan-deps", "llvm-cov", "llvm-profdata")]
+        files = [f"{llvm}/bin/{tool}.exe" for tool in ("clangd", "clang-scan-deps", "llvm-cov", "llvm-profdata", "llvm-readobj")]
         files += [f"{llvm}/lib/clang/{llvm_major}/include/stddef.h",
                  f"lldb-{lock['lldb']['version']}/bin/lldb-dap.exe",
                  f"lldb-{lock['lldb']['version']}/bin/liblldb.dll",
@@ -351,7 +351,7 @@ class StageScriptTest(TempDirTestCase):
         result = self._stage(build, destination, *self._fake_tools())
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         for name in (f"{llvm}/bin/clangd.exe", f"{llvm}/bin/clang-scan-deps.exe",
-                     f"{llvm}/bin/llvm-cov.exe", f"{llvm}/bin/llvm-profdata.exe",
+                     f"{llvm}/bin/llvm-cov.exe", f"{llvm}/bin/llvm-profdata.exe", f"{llvm}/bin/llvm-readobj.exe",
                      f"{llvm}/lib/clang/{llvm_major}/include/stddef.h",
                      f"lldb-{lock['lldb']['version']}/bin/liblldb.dll", f"{luals}/bin/lua-language-server.exe",
                      f"{luals}/main.lua", f"{luals}/meta/template/basic.lua", "licenses/luals-LICENSE.txt",
@@ -400,6 +400,16 @@ class StageScriptTest(TempDirTestCase):
                 self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                 self.assertIn(f"stage: FAIL missing bundled {tool}", result.stdout)
                 self.assertFalse(destination.exists(), "nothing is staged without the tool")
+
+        build = self._fake_build()
+        arguments = self._fake_tools()
+        (self.tmp / f"sdk/llvm-{lock['llvm']['version']}/bin/llvm-readobj.exe").unlink()
+        destination = self.tmp / "missing-tool"
+        result = self._stage(build, destination, *arguments)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("stage: FAIL missing bundled LLVM coverage tool:", result.stdout)
+        self.assertIn("llvm-readobj.exe", result.stdout)
+        self.assertFalse(destination.exists())
 
     def test_the_symbol_archive_holds_the_images_and_their_pdbs(self) -> None:
         build = self._fake_build()
