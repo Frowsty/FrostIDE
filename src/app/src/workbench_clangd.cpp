@@ -145,10 +145,11 @@ void Workbench::startProjectEvaluation(const std::string& root) {
             m_explorer->setSolution(m_solution);
     }
     stopProjectEvaluation();
+    const auto admission = m_services.trust.snapshot(root);
+    // The trust watcher must observe this revision even when the solution model stays static.
+    m_projectTrustRevision = admission.revision;
     if (m_solution && m_solution->approximate())
         return; // Trust does not make Linux static parsing into an MSBuild evaluation.
-    const auto admission = m_services.trust.snapshot(root);
-    m_projectTrustRevision = admission.revision;
     std::string configuration;
     if (const auto active = m_build->activeConfigurationIndex(); active && *active < m_build->configurations().size())
         configuration = m_build->configurations()[*active].name();
