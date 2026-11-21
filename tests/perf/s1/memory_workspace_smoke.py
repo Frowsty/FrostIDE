@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Verify native memory counters against owned, authenticated Debug Workbench phases."""
+# Verify native memory counters for an owned Debug Workbench before and after opening a workspace.
 from __future__ import annotations
 
 import argparse
