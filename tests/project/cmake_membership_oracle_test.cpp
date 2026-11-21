@@ -110,11 +110,11 @@ TEST(CMakeTemplateOracle, RenderedClassAndPostfixTargetBecomeRealConfiguredBuild
     test::ScratchDir scratch("cmake-template-oracle");
     auto& fs = io::realFileSystem();
     const auto root = scratch.path();
-    const auto build = root + "/build";
-    const auto lists = root + "/CMakeLists.txt";
+    const auto build = scratch.join("build");
+    const auto lists = scratch.join("CMakeLists.txt");
     ASSERT_TRUE(fs.writeFileAtomic(lists, "cmake_minimum_required(VERSION 3.20)\nproject(Templates LANGUAGES "
                                           "CXX)\nset(CMAKE_CXX_STANDARD 20)\nadd_library(core STATIC base.cpp)\n"));
-    ASSERT_TRUE(fs.writeFileAtomic(root + "/base.cpp", "int base_value(){return 7;}\n"));
+    ASSERT_TRUE(fs.writeFileAtomic(scratch.join("base.cpp"), "int base_value(){return 7;}\n"));
     ASSERT_TRUE(writeCMakeFileApiQuery(fs, build));
     auto run = [&](std::vector<std::string> arguments) {
         io::ProcessSpec spec;
@@ -149,7 +149,7 @@ TEST(CMakeTemplateOracle, RenderedClassAndPostfixTargetBecomeRealConfiguredBuild
     ASSERT_TRUE(files);
     std::vector<std::string> paths;
     for (const auto& file : *files)
-        paths.push_back(root + "/" + file.name);
+        paths.push_back(scratch.join(file.name));
     const auto* core = model.findTarget("core");
     ASSERT_NE(core, nullptr);
     auto plan =
@@ -179,7 +179,7 @@ TEST(CMakeTemplateOracle, RenderedClassAndPostfixTargetBecomeRealConfiguredBuild
     ASSERT_TRUE(loop && condition);
     const std::string source = "#include <vector>\nint main(){std::vector<int> items{1,2};\n" + loop->parsed.text +
                                "\n" + condition->parsed.text + "\nreturn 0;}\n";
-    const std::vector<std::string> mainPath{root + "/Tool.cpp"};
+    const std::vector<std::string> mainPath{scratch.join("Tool.cpp")};
     auto target = planCMakeTemplateTarget(model, "Tool", false, mainPath, capture());
     ASSERT_TRUE(target) << target.error().describe();
     EXPECT_FALSE(fs.exists(mainPath[0]).value_or(true));
