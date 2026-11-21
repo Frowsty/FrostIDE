@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Proposal assembly and composed Workbench rename/undo tests; execution is deferred.
-#include "frost/core/clock.hpp"
-#include "frost/io/mem_fs.hpp"
 #include "frost/ui/editor/editor_view.hpp"
 
+#include "build/build_test_util.hpp"
 #include "file_transaction_replace_testing.hpp"
 #include "workbench_rig.hpp"
 #include "workbench_source_rename.hpp"
@@ -15,19 +14,20 @@
 namespace {
 
 using namespace frost;
+using frost::build::test::MemTree;
 
 TEST(SourceRenamePlan, SourceAndSidecarAndMembershipJoinOneUnappliedPlan) {
-    ManualClock clock;
-    io::MemFs fs{clock, io::PathStyle::Posix};
-    ASSERT_TRUE(fs.createDirectories("/p"));
-    ASSERT_TRUE(fs.writeFileAtomic("/p/old.cpp", "source bytes"));
-    ASSERT_TRUE(fs.writeFileAtomic("/p/old.cpp.fmeta", "stable-guid"));
-    ASSERT_TRUE(fs.writeFileAtomic("/p/CMakeLists.txt", "add_library(x old.cpp)"));
-    auto move = lang::planFmetaMove(fs, "/p/old.cpp", "/p/new.cpp");
+    MemTree tree;
+    auto& fs = tree.fs;
+    ASSERT_TRUE(fs.createDirectories(MemTree::path("p")));
+    ASSERT_TRUE(fs.writeFileAtomic(MemTree::path("p/old.cpp"), "source bytes"));
+    ASSERT_TRUE(fs.writeFileAtomic(MemTree::path("p/old.cpp.fmeta"), "stable-guid"));
+    ASSERT_TRUE(fs.writeFileAtomic(MemTree::path("p/CMakeLists.txt"), "add_library(x old.cpp)"));
+    auto move = lang::planFmetaMove(fs, MemTree::path("p/old.cpp"), MemTree::path("p/new.cpp"));
     ASSERT_TRUE(move);
     auto plan = app::prepareSourceFileRename(fs, *move, "Rename source");
     ASSERT_TRUE(plan);
-    auto input = app::captureRefactoringInput(fs, "/p/CMakeLists.txt");
+    auto input = app::captureRefactoringInput(fs, MemTree::path("p/CMakeLists.txt"));
     ASSERT_TRUE(input);
     ASSERT_TRUE(app::appendRefactoringReplacement(*plan, *input, "add_library(x old.cpp)", "add_library(x new.cpp)"));
     ASSERT_EQ(plan->renames.size(), 2);
@@ -36,23 +36,23 @@ TEST(SourceRenamePlan, SourceAndSidecarAndMembershipJoinOneUnappliedPlan) {
     ASSERT_EQ(plan->disk.size(), 1);
     EXPECT_EQ(plan->disk[0].expectedBytes, "add_library(x old.cpp)");
     EXPECT_EQ(plan->disk[0].afterBytes, "add_library(x new.cpp)");
-    EXPECT_EQ(*fs.readFile("/p/old.cpp"), "source bytes");
-    EXPECT_EQ(*fs.readFile("/p/old.cpp.fmeta"), "stable-guid");
-    EXPECT_EQ(*fs.readFile("/p/CMakeLists.txt"), "add_library(x old.cpp)");
-    EXPECT_FALSE(fs.exists("/p/new.cpp").value_or(true));
+    EXPECT_EQ(*fs.readFile(MemTree::path("p/old.cpp")), "source bytes");
+    EXPECT_EQ(*fs.readFile(MemTree::path("p/old.cpp.fmeta")), "stable-guid");
+    EXPECT_EQ(*fs.readFile(MemTree::path("p/CMakeLists.txt")), "add_library(x old.cpp)");
+    EXPECT_FALSE(fs.exists(MemTree::path("p/new.cpp")).value_or(true));
 }
 
 TEST(SourceRenamePlan, AbsentSidecarsAreReadDependenciesRatherThanInventedFiles) {
-    ManualClock clock;
-    io::MemFs fs{clock, io::PathStyle::Posix};
-    ASSERT_TRUE(fs.createDirectories("/p"));
-    ASSERT_TRUE(fs.writeFileAtomic("/p/old.cpp", "bytes"));
-    auto move = lang::planFmetaMove(fs, "/p/old.cpp", "/p/new.cpp");
+    MemTree tree;
+    auto& fs = tree.fs;
+    ASSERT_TRUE(fs.createDirectories(MemTree::path("p")));
+    ASSERT_TRUE(fs.writeFileAtomic(MemTree::path("p/old.cpp"), "bytes"));
+    auto move = lang::planFmetaMove(fs, MemTree::path("p/old.cpp"), MemTree::path("p/new.cpp"));
     ASSERT_TRUE(move);
     auto plan = app::prepareSourceFileRename(fs, *move, "Rename");
     ASSERT_TRUE(plan);
     ASSERT_EQ(plan->renames.size(), 1);
-    for (std::string_view path : {"/p/old.cpp.fmeta", "/p/new.cpp.fmeta"}) {
+    for (std::string_view path : {MemTree::path("p/old.cpp.fmeta"), MemTree::path("p/new.cpp.fmeta")}) {
         auto dependency = std::ranges::find(plan->dependencies, path, &document::ReadDependency::path);
         ASSERT_NE(dependency, plan->dependencies.end());
         EXPECT_FALSE(dependency->expectedBytes.has_value());
@@ -60,31 +60,31 @@ TEST(SourceRenamePlan, AbsentSidecarsAreReadDependenciesRatherThanInventedFiles)
 }
 
 TEST(SourceRenamePlan, OrphanDestinationMetadataAndChangedSourceSidecarRefuseBeforeEffects) {
-    ManualClock clock;
-    io::MemFs fs{clock, io::PathStyle::Posix};
-    ASSERT_TRUE(fs.createDirectories("/p"));
-    ASSERT_TRUE(fs.writeFileAtomic("/p/old.cpp", "source"));
-    auto move = lang::planFmetaMove(fs, "/p/old.cpp", "/p/new.cpp");
+    MemTree tree;
+    auto& fs = tree.fs;
+    ASSERT_TRUE(fs.createDirectories(MemTree::path("p")));
+    ASSERT_TRUE(fs.writeFileAtomic(MemTree::path("p/old.cpp"), "source"));
+    auto move = lang::planFmetaMove(fs, MemTree::path("p/old.cpp"), MemTree::path("p/new.cpp"));
     ASSERT_TRUE(move);
-    ASSERT_TRUE(fs.writeFileAtomic("/p/new.cpp.fmeta", "unrelated-guid"));
+    ASSERT_TRUE(fs.writeFileAtomic(MemTree::path("p/new.cpp.fmeta"), "unrelated-guid"));
     auto orphan = app::prepareSourceFileRename(fs, *move, "Rename");
     ASSERT_FALSE(orphan);
     EXPECT_EQ(orphan.error().code(), ErrorCode::AlreadyExists);
-    ASSERT_TRUE(fs.removeFile("/p/new.cpp.fmeta"));
-    ASSERT_TRUE(fs.writeFileAtomic("/p/old.cpp.fmeta", "newly-created-guid"));
+    ASSERT_TRUE(fs.removeFile(MemTree::path("p/new.cpp.fmeta")));
+    ASSERT_TRUE(fs.writeFileAtomic(MemTree::path("p/old.cpp.fmeta"), "newly-created-guid"));
     auto changed = app::prepareSourceFileRename(fs, *move, "Rename");
     ASSERT_FALSE(changed);
     EXPECT_EQ(changed.error().code(), ErrorCode::Busy);
-    EXPECT_EQ(*fs.readFile("/p/old.cpp"), "source");
-    EXPECT_FALSE(fs.exists("/p/new.cpp").value_or(true));
+    EXPECT_EQ(*fs.readFile(MemTree::path("p/old.cpp")), "source");
+    EXPECT_FALSE(fs.exists(MemTree::path("p/new.cpp")).value_or(true));
 }
 
 TEST(SourceRenamePlan, DirtyMembershipUsesBufferReplacementAndBothReadReceipts) {
-    ManualClock clock;
-    io::MemFs fs{clock, io::PathStyle::Posix};
-    ASSERT_TRUE(fs.createDirectories("/p"));
-    ASSERT_TRUE(fs.writeFileAtomic("/p/Project.vcxproj", "saved old.cpp"));
-    auto input = app::captureRefactoringInput(fs, "/p/Project.vcxproj", "unsaved old.cpp");
+    MemTree tree;
+    auto& fs = tree.fs;
+    ASSERT_TRUE(fs.createDirectories(MemTree::path("p")));
+    ASSERT_TRUE(fs.writeFileAtomic(MemTree::path("p/Project.vcxproj"), "saved old.cpp"));
+    auto input = app::captureRefactoringInput(fs, MemTree::path("p/Project.vcxproj"), "unsaved old.cpp");
     ASSERT_TRUE(input);
     document::RefactoringPlan plan;
     ASSERT_TRUE(app::appendRefactoringReplacement(plan, *input, "unsaved old.cpp", "unsaved new.cpp"));
@@ -97,31 +97,31 @@ TEST(SourceRenamePlan, DirtyMembershipUsesBufferReplacementAndBothReadReceipts) 
     EXPECT_EQ(plan.dependencies[0].expectedBytes, "saved old.cpp");
     ASSERT_EQ(plan.bufferDependencies.size(), 1);
     EXPECT_EQ(plan.bufferDependencies[0].expectedText, "unsaved old.cpp");
-    EXPECT_EQ(*fs.readFile("/p/Project.vcxproj"), "saved old.cpp");
+    EXPECT_EQ(*fs.readFile(MemTree::path("p/Project.vcxproj")), "saved old.cpp");
 }
 
 TEST(SourceRenamePlan, OpenUtf8BomDefinitionsCompareDecodedBufferWithoutChangingItsFormat) {
-    ManualClock clock;
-    io::MemFs fs{clock, io::PathStyle::Posix};
-    ASSERT_TRUE(fs.createDirectories("/p"));
+    MemTree tree;
+    auto& fs = tree.fs;
+    ASSERT_TRUE(fs.createDirectories(MemTree::path("p")));
     const std::string before = "\xef\xbb\xbf<Project>old.cpp</Project>";
-    ASSERT_TRUE(fs.writeFileAtomic("/p/Project.vcxproj", before));
-    auto input = app::captureRefactoringInput(fs, "/p/Project.vcxproj", "<Project>old.cpp</Project>");
+    ASSERT_TRUE(fs.writeFileAtomic(MemTree::path("p/Project.vcxproj"), before));
+    auto input = app::captureRefactoringInput(fs, MemTree::path("p/Project.vcxproj"), "<Project>old.cpp</Project>");
     ASSERT_TRUE(input);
     document::RefactoringPlan plan;
     ASSERT_TRUE(app::appendRefactoringReplacement(plan, *input, before, "\xef\xbb\xbf<Project>new.cpp</Project>"));
     ASSERT_EQ(plan.buffers.size(), 1);
     EXPECT_EQ(plan.buffers[0].expectedText, "<Project>old.cpp</Project>");
     EXPECT_EQ(plan.buffers[0].afterText, "<Project>new.cpp</Project>");
-    EXPECT_EQ(*fs.readFile("/p/Project.vcxproj"), before);
+    EXPECT_EQ(*fs.readFile(MemTree::path("p/Project.vcxproj")), before);
 }
 
 TEST(SourceRenamePlan, ReadOnlyDirtyInputDependencyDoesNotInventAnEdit) {
-    ManualClock clock;
-    io::MemFs fs{clock, io::PathStyle::Posix};
-    ASSERT_TRUE(fs.createDirectories("/p"));
-    ASSERT_TRUE(fs.writeFileAtomic("/p/Project.vcxproj.filters", "saved"));
-    auto input = app::captureRefactoringInput(fs, "/p/Project.vcxproj.filters", "unsaved");
+    MemTree tree;
+    auto& fs = tree.fs;
+    ASSERT_TRUE(fs.createDirectories(MemTree::path("p")));
+    ASSERT_TRUE(fs.writeFileAtomic(MemTree::path("p/Project.vcxproj.filters"), "saved"));
+    auto input = app::captureRefactoringInput(fs, MemTree::path("p/Project.vcxproj.filters"), "unsaved");
     ASSERT_TRUE(input);
     document::RefactoringPlan plan;
     ASSERT_TRUE(app::appendRefactoringDependency(plan, *input));
@@ -137,53 +137,53 @@ TEST(SourceRenamePlan, ReadOnlyDirtyInputDependencyDoesNotInventAnEdit) {
 }
 
 TEST(SourceRenamePlan, MissingAndNonRegularInputsStayDistinctAndNoPartialMoveOccurs) {
-    ManualClock clock;
-    io::MemFs fs{clock, io::PathStyle::Posix};
-    ASSERT_TRUE(fs.createDirectories("/p"));
-    ASSERT_TRUE(fs.writeFileAtomic("/p/old.cpp", "source"));
-    ASSERT_TRUE(fs.createDirectories("/p/directory"));
-    auto missing = app::captureRefactoringInput(fs, "/p/missing.filters");
+    MemTree tree;
+    auto& fs = tree.fs;
+    ASSERT_TRUE(fs.createDirectories(MemTree::path("p")));
+    ASSERT_TRUE(fs.writeFileAtomic(MemTree::path("p/old.cpp"), "source"));
+    ASSERT_TRUE(fs.createDirectories(MemTree::path("p/directory")));
+    auto missing = app::captureRefactoringInput(fs, MemTree::path("p/missing.filters"));
     ASSERT_TRUE(missing);
     EXPECT_FALSE(missing->disk);
-    EXPECT_FALSE(app::captureRefactoringInput(fs, "/p/directory"));
-    auto move = lang::planFmetaMove(fs, "/p/old.cpp", "/p/new.cpp");
+    EXPECT_FALSE(app::captureRefactoringInput(fs, MemTree::path("p/directory")));
+    auto move = lang::planFmetaMove(fs, MemTree::path("p/old.cpp"), MemTree::path("p/new.cpp"));
     ASSERT_TRUE(move);
     auto plan = app::prepareSourceFileRename(fs, *move, "Rename");
     ASSERT_TRUE(plan);
-    ASSERT_TRUE(fs.writeFileAtomic("/p/CMakeLists.txt", "actual"));
-    auto input = app::captureRefactoringInput(fs, "/p/CMakeLists.txt");
+    ASSERT_TRUE(fs.writeFileAtomic(MemTree::path("p/CMakeLists.txt"), "actual"));
+    auto input = app::captureRefactoringInput(fs, MemTree::path("p/CMakeLists.txt"));
     ASSERT_TRUE(input);
     EXPECT_FALSE(app::appendRefactoringReplacement(*plan, *input, "stale", "replacement"));
-    EXPECT_EQ(*fs.readFile("/p/old.cpp"), "source");
-    EXPECT_FALSE(fs.exists("/p/new.cpp").value_or(true));
+    EXPECT_EQ(*fs.readFile(MemTree::path("p/old.cpp")), "source");
+    EXPECT_FALSE(fs.exists(MemTree::path("p/new.cpp")).value_or(true));
 }
 
 TEST(SourceRenamePlan, DirtyImportedPropsCannotBorrowTheHelpersMatchingDiskReceipt) {
-    ManualClock clock;
-    io::MemFs fs{clock, io::PathStyle::Posix};
-    ASSERT_TRUE(fs.createDirectories("/p"));
-    ASSERT_TRUE(fs.writeFileAtomic("/p/shared.props", "<ClInclude Include='old.hpp'/>"));
-    auto input = app::captureRefactoringInput(fs, "/p/shared.props", "<ClInclude Include='other.hpp'/>");
+    MemTree tree;
+    auto& fs = tree.fs;
+    ASSERT_TRUE(fs.createDirectories(MemTree::path("p")));
+    ASSERT_TRUE(fs.writeFileAtomic(MemTree::path("p/shared.props"), "<ClInclude Include='old.hpp'/>"));
+    auto input = app::captureRefactoringInput(fs, MemTree::path("p/shared.props"), "<ClInclude Include='other.hpp'/>");
     ASSERT_TRUE(input);
     // ProjectHost evaluated the disk bytes. Leasing this unrelated dirty overlay would not make
     // it the evaluated project: the rename must refuse before assembling any mutable effects.
     auto matched = app::refactoringInputMatchesEvaluation(*input, input->disk);
     ASSERT_FALSE(matched);
     EXPECT_EQ(matched.error().code(), ErrorCode::Busy);
-    EXPECT_EQ(*fs.readFile("/p/shared.props"), "<ClInclude Include='old.hpp'/>");
+    EXPECT_EQ(*fs.readFile(MemTree::path("p/shared.props")), "<ClInclude Include='old.hpp'/>");
 }
 
 TEST(SourceRenamePlan, CleanUtf16ImportedBufferMatchesOnlyItsLosslesslyDecodedEvaluation) {
-    ManualClock clock;
-    io::MemFs fs{clock, io::PathStyle::Posix};
-    ASSERT_TRUE(fs.createDirectories("/p"));
+    MemTree tree;
+    auto& fs = tree.fs;
+    ASSERT_TRUE(fs.createDirectories(MemTree::path("p")));
     std::string bytes = "\xff\xfe";
     for (char value : std::string("<Project/>")) {
         bytes += value;
         bytes += '\0';
     }
-    ASSERT_TRUE(fs.writeFileAtomic("/p/shared.props", bytes));
-    auto input = app::captureRefactoringInput(fs, "/p/shared.props", "<Project/>");
+    ASSERT_TRUE(fs.writeFileAtomic(MemTree::path("p/shared.props"), bytes));
+    auto input = app::captureRefactoringInput(fs, MemTree::path("p/shared.props"), "<Project/>");
     ASSERT_TRUE(input);
     EXPECT_TRUE(app::refactoringInputMatchesEvaluation(*input, input->disk));
     input->buffer = "<Project><ClInclude Include='other.hpp'/></Project>";
@@ -328,24 +328,25 @@ TEST(SourceRenameWorkbench, SameProcessResumeRetainsExternalLeaseUntilNativeJour
 } // namespace
 
 TEST(SourceRenamePlan, UnityMetaJoinsOriginalSourceReceiptAndDestinationAbsence) {
-    ManualClock clock;
-    io::MemFs fs{clock, io::PathStyle::Posix};
-    ASSERT_TRUE(fs.createDirectories("/p/Assets"));
-    ASSERT_TRUE(fs.writeFileAtomic("/p/Assets/A.cs", "// original\r\n"));
+    MemTree tree;
+    auto& fs = tree.fs;
+    ASSERT_TRUE(fs.createDirectories(MemTree::path("p/Assets")));
+    ASSERT_TRUE(fs.writeFileAtomic(MemTree::path("p/Assets/A.cs"), "// original\r\n"));
     const std::string metadata = "guid: 0123456789abcdef0123456789abcdef\r\nimporter: unchanged\r\n";
-    ASSERT_TRUE(fs.writeFileAtomic("/p/Assets/A.cs.meta", metadata));
-    auto move = lang::planFmetaMove(fs, "/p/Assets/A.cs", "/p/Assets/B.cs");
+    ASSERT_TRUE(fs.writeFileAtomic(MemTree::path("p/Assets/A.cs.meta"), metadata));
+    auto move = lang::planFmetaMove(fs, MemTree::path("p/Assets/A.cs"), MemTree::path("p/Assets/B.cs"));
     ASSERT_TRUE(move);
     auto plan = app::prepareSourceFileRename(fs, *move, "Rename Unity asset");
     ASSERT_TRUE(plan);
-    ASSERT_TRUE(app::appendUnityMetaRename(fs, *plan, "/p/Assets/A.cs", "/p/Assets/B.cs"));
+    ASSERT_TRUE(app::appendUnityMetaRename(fs, *plan, MemTree::path("p/Assets/A.cs"), MemTree::path("p/Assets/B.cs")));
     ASSERT_EQ(plan->renames.size(), 2);
     EXPECT_EQ(plan->renames[1].expectedBytes, metadata);
-    EXPECT_EQ(plan->renames[1].to, "/p/Assets/B.cs.meta");
-    const auto target = std::ranges::find(plan->dependencies, "/p/Assets/B.cs.meta", &document::ReadDependency::path);
+    EXPECT_EQ(plan->renames[1].to, MemTree::path("p/Assets/B.cs.meta"));
+    const auto target =
+        std::ranges::find(plan->dependencies, MemTree::path("p/Assets/B.cs.meta"), &document::ReadDependency::path);
     ASSERT_NE(target, plan->dependencies.end());
     EXPECT_FALSE(target->expectedBytes);
-    EXPECT_EQ(*fs.readFile("/p/Assets/A.cs.meta"), metadata);
-    ASSERT_TRUE(fs.writeFileAtomic("/p/Assets/B.cs.meta", "foreign"));
-    EXPECT_FALSE(app::appendUnityMetaRename(fs, *plan, "/p/Assets/A.cs", "/p/Assets/B.cs"));
+    EXPECT_EQ(*fs.readFile(MemTree::path("p/Assets/A.cs.meta")), metadata);
+    ASSERT_TRUE(fs.writeFileAtomic(MemTree::path("p/Assets/B.cs.meta"), "foreign"));
+    EXPECT_FALSE(app::appendUnityMetaRename(fs, *plan, MemTree::path("p/Assets/A.cs"), MemTree::path("p/Assets/B.cs")));
 }
