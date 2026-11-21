@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Preserve compiler driver mode and MSVC preprocessing semantics in Clang's textual replay.
 #pragma once
 
 #include "clang/Driver/Driver.h"
