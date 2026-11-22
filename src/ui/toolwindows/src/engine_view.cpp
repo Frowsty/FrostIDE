@@ -35,10 +35,11 @@ void assetRow(QTreeWidgetItem& parent, const engine::ProjectAsset& asset, engine
 
 } // namespace
 
-EngineView::EngineView(QWidget* parent) : QWidget(parent) {
+EngineView::EngineView(QWidget* parent)
+    : QWidget(parent), m_tree(new QTreeWidget(this)), m_status(new QLabel(this)), m_usages(new QTreeWidget(this)),
+      m_usageStatus(new QLabel(this)) {
     setObjectName(QStringLiteral("engineView"));
     auto* layout = new QVBoxLayout(this);
-    m_status = new QLabel(this);
     m_status->setObjectName(QStringLiteral("engineViewStatus"));
     m_status->setTextFormat(Qt::PlainText);
     m_status->setWordWrap(true);
@@ -47,7 +48,6 @@ EngineView::EngineView(QWidget* parent) : QWidget(parent) {
     m_refresh->setObjectName(QStringLiteral("engineViewRefresh"));
     layout->addWidget(m_refresh);
     connect(m_refresh, &QPushButton::clicked, this, &EngineView::refreshRequested);
-    m_tree = new QTreeWidget(this);
     m_tree->setObjectName(QStringLiteral("engineViewTree"));
     m_tree->setColumnCount(3);
     m_tree->setHeaderLabels({tr("Project content"), tr("Type"), tr("Handle")});
@@ -91,11 +91,9 @@ EngineView::EngineView(QWidget* parent) : QWidget(parent) {
                 }
         });
     }
-    m_usageStatus = new QLabel(this);
     m_usageStatus->setWordWrap(true);
     m_usageStatus->setTextFormat(Qt::PlainText);
     layout->addWidget(m_usageStatus);
-    m_usages = new QTreeWidget(this);
     m_usages->setObjectName(QStringLiteral("engineAssetUsages"));
     m_usages->setColumnCount(4);
     m_usages->setHeaderLabels({tr("Referencing document"), tr("Occurrences"), tr("State"), tr("Setting")});

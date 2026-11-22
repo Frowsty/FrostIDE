@@ -30,7 +30,7 @@ struct PropertyDialog {
     std::uint64_t request{}, generation{};
     bool expectedSupported{}, closed{};
 };
-void requestProperty(const std::shared_ptr<PropertyDialog>& state, std::string method, lang::Json params,
+void requestProperty(const std::shared_ptr<PropertyDialog>& state, const std::string& method, lang::Json params,
                      std::function<void(Result<lang::Json>)> done) {
     if (state->closed || !state->dialog || !state->owner || !state->current())
         return;
@@ -38,8 +38,7 @@ void requestProperty(const std::shared_ptr<PropertyDialog>& state, std::string m
     state->load->setEnabled(false);
     state->apply->setEnabled(false);
     auto started = state->owner->contentCommand(
-        std::move(method), std::move(params),
-        [state, generation, done = std::move(done)](Result<lang::Json> result) mutable {
+        method, std::move(params), [state, generation, done = std::move(done)](Result<lang::Json> result) mutable {
             if (state->closed || !state->dialog || generation != state->generation || !state->current())
                 return;
             state->request = 0;

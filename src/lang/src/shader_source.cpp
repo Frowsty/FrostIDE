@@ -34,7 +34,7 @@ Resolution resolve(io::IFileSystem& fs, const ShaderLanguageInput& input, const 
         return out;
     }
     std::set<std::string> seen;
-    auto add = [&](std::string path, std::string boundary, std::string provenance) {
+    auto add = [&](const std::string& path, const std::string& boundary, std::string provenance) {
         if (out.candidates.size() >= kShaderMaxCandidates)
             return;
         auto actual = fs.physicalPath(path);
@@ -98,7 +98,7 @@ std::string describe(const syntax::ShaderInclude& include, const Resolution& res
 }
 } // namespace
 Result<Json> queryShaderSource(io::IFileSystem& fs, const ShaderLanguageInput& input, std::string_view method,
-                               const Json& params, std::stop_token stop) {
+                               const Json& params, const std::stop_token& stop) {
     if (stop.stop_requested())
         return fail(ErrorCode::Cancelled, "Shader source navigation cancelled");
     if (method != "textDocument/hover" && method != "textDocument/definition" && method != "textDocument/declaration" &&

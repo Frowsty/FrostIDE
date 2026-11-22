@@ -21,7 +21,7 @@ protected:
     frost::test::ScratchDir scratch{"native-analyzer"};
     std::string file = scratch.join("input.cpp");
     std::string compiler = frost::io::normalizePath(FROST_TEST_CXX_COMPILER).value();
-    Json run(const std::string& bytes, std::string rule, std::string mode = "--analyze-unit",
+    Json run(const std::string& bytes, std::string rule, const std::string& mode = "--analyze-unit",
              Json overlays = Json::array(), std::vector<std::string> extraArguments = {}, int expectedExit = 0) {
         auto& fs = frost::io::realFileSystem();
         EXPECT_TRUE(fs.writeFileAtomic(file, bytes));
@@ -53,7 +53,7 @@ protected:
                            .set("configuration", "fixture-active")
                            .set("commandIndex", 0)
                            .set("overlays", std::move(overlays))
-                           .set("rules", Json::array({Json(rule)}));
+                           .set("rules", Json::array({Json(std::move(rule))}));
         frost::io::ProcessSpec spec;
         spec.executable = frost::io::normalizePath(FROST_ANALYZER_BINARY).value();
         spec.stdinMode = frost::io::Stdio::Pipe;

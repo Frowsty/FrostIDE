@@ -20,7 +20,6 @@
 #include <client/crashpad_client.h>
 #include <sys/prctl.h>
 
-#include <signal.h>
 #include <unistd.h>
 #endif
 

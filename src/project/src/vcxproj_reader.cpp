@@ -199,7 +199,7 @@ std::vector<std::string> resolveInclude(io::IFileSystem& fs, std::string_view di
             warn(std::format("Include '{}' skipped: {}", entry, pattern.error().message()));
             return {};
         }
-        auto expansion = detail::expandWildcard(fs, *pattern, {.stop = stop});
+        auto expansion = detail::expandWildcard(fs, *pattern, {.stop = std::move(stop)});
         if (!expansion) {
             warn(std::format("Include '{}' skipped: {}", entry, expansion.error().message()));
             return {};

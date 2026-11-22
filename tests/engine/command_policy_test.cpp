@@ -140,7 +140,7 @@ TEST(CommandPolicy, CategoryOrFamiliarCommandNameNeverGrantsPermission) {
     schema.commands.front().category = "ReadOnly";
     schema.commands.front().idePolicy.reset();
     auto observed = context();
-    observed.availableCommands.push_back("play.start");
+    observed.availableCommands.emplace_back("play.start");
     observed.mutationAllowed = true;
     EXPECT_FALSE(CommandPolicy(std::move(schema), context().selectedProject, context().selectedSession)
                      .admit("play.start", Json::object(), observed));
@@ -148,7 +148,7 @@ TEST(CommandPolicy, CategoryOrFamiliarCommandNameNeverGrantsPermission) {
 
 TEST(CommandPolicy, UnsupportedFlagsAndAmbiguousRegistrationsFailClosed) {
     auto schema = policySchema();
-    schema.commands.front().flags.push_back("FuturePrivilege");
+    schema.commands.front().flags.emplace_back("FuturePrivilege");
     EXPECT_FALSE(CommandPolicy(schema, context().selectedProject, context().selectedSession)
                      .admit("scene.inspect", Json::object(), context()));
     schema.commands.front().flags.pop_back();

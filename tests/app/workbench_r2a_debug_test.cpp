@@ -226,8 +226,8 @@ TEST(WorkbenchR2a, NotepadPlusPlusDebuggerAcceptance) {
     ASSERT_TRUE(msbuild) << msbuild.error().describe();
     auto built = fixtureProcess(msbuild->msbuildPath,
                                 {solution, "-t:Build", "-p:Configuration=Debug", "-p:Platform=x64",
-                                 "-p:VCToolsVersion=" FROST_PINNED_VC_TOOLS,
-                                 "-p:WindowsTargetPlatformVersion=" FROST_PINNED_WINSDK},
+                                 std::string("-p:VCToolsVersion=") + FROST_PINNED_VC_TOOLS,
+                                 std::string("-p:WindowsTargetPlatformVersion=") + FROST_PINNED_WINSDK},
                                 root + "/PowerEditor/visual.net", 1h);
     ASSERT_TRUE(built) << built.error().describe();
     RecordProperty("r2aSourceSha", FROST_CORPUS_R2A_SHA);

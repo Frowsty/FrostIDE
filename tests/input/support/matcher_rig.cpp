@@ -11,6 +11,7 @@
 #include <chrono>
 #include <format>
 #include <random>
+#include <ranges>
 #include <utility>
 
 namespace frost::input::test {
@@ -158,8 +159,8 @@ Step MatcherRig::stroke(Modifiers mods, Code key) {
     }
     const std::vector<KeyEvent> tapped = keyboard.tap(key);
     events.insert(events.end(), tapped.begin(), tapped.end());
-    for (auto it = held.rbegin(); it != held.rend(); ++it) {
-        const std::vector<KeyEvent> up = keyboard.release(*it);
+    for (const Code c : std::views::reverse(held)) {
+        const std::vector<KeyEvent> up = keyboard.release(c);
         events.insert(events.end(), up.begin(), up.end());
     }
     Step step = feedAll(std::move(events));

@@ -18,7 +18,6 @@
 namespace {
 
 using namespace std::chrono_literals;
-using frost::term::FakePty;
 using frost::term::FakePtyLauncher;
 using frost::term::KeyMods;
 using frost::term::PtySize;

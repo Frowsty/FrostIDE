@@ -105,7 +105,7 @@ struct Inventory {
     }
     bool contained(std::string_view physical) const {
         const auto actual = key(std::string(physical)), root = key(physicalRoot);
-        return actual == root || (root == "/" ? actual.starts_with("/") : actual.starts_with(root + "/"));
+        return actual == root || (root == "/" ? actual.starts_with('/') : actual.starts_with(root + "/"));
     }
     Result<bool> admit(const std::string& path, io::FileType type) {
         auto parentPhysical = fs.physicalPath(io::parentPath(path));

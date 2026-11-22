@@ -16,7 +16,7 @@ public:
     // Controller outlives this GUI-thread widget. No debug values are synthesized locally.
     explicit DebugSymbolsWindow(DebugController&, QWidget* parent = nullptr);
     // Absolute admitted files used by the launched target; saved replacements reload at next stop.
-    void setVisualizers(QStringList files);
+    void setVisualizers(const QStringList& files);
 
 private:
     void refresh();

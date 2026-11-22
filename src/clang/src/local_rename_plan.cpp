@@ -77,10 +77,12 @@ public:
         : m_sm(sm), m_language(language), m_offset(offset) {}
     const clang::VarDecl* declaration = nullptr;
     bool ambiguous = false;
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitVarDecl(clang::VarDecl* declaration) {
         consider(declaration, declaration->getLocation());
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitDeclRefExpr(clang::DeclRefExpr* reference) {
         if (const auto* variable = llvm::dyn_cast<clang::VarDecl>(reference->getDecl())) {
             consider(variable, reference->getLocation());
@@ -116,6 +118,7 @@ public:
     bool unsupported = false;
     std::set<unsigned> occurrences;
     std::map<unsigned, std::string> references;
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitDecl(clang::Decl* declaration) {
         unsupported |= declaration->getLocation().isMacroID();
         if (llvm::isa<clang::BindingDecl>(declaration) || llvm::isa<clang::FunctionTemplateDecl>(declaration)) {
@@ -123,26 +126,31 @@ public:
         }
         return !unsupported;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitStmt(clang::Stmt* statement) {
         unsupported |= statement->getBeginLoc().isMacroID() || statement->getEndLoc().isMacroID() ||
                        llvm::isa<clang::LambdaExpr>(statement) || llvm::isa<clang::CoroutineBodyStmt>(statement);
         return !unsupported;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitExpr(clang::Expr* expression) {
         unsupported |= expression->isTypeDependent() || expression->isValueDependent() ||
                        expression->containsUnexpandedParameterPack();
         return !unsupported;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitTypeLoc(clang::TypeLoc type) {
         unsupported |= type.getBeginLoc().isMacroID() || type.getEndLoc().isMacroID();
         return !unsupported;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitVarDecl(clang::VarDecl* variable) {
         if (variable->getCanonicalDecl() == m_target) {
             recordOccurrence(variable->getLocation());
         }
         return !unsupported;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitDeclRefExpr(clang::DeclRefExpr* reference) {
         if (reference->getDecl()->getCanonicalDecl() == m_target) {
             recordOccurrence(reference->getLocation());
@@ -150,6 +158,7 @@ public:
         recordReference(reference->getLocation(), reference->getDecl());
         return !unsupported;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitMemberExpr(clang::MemberExpr* reference) {
         recordReference(reference->getMemberLoc(), reference->getMemberDecl());
         return !unsupported;
@@ -288,9 +297,9 @@ bool argumentsFor(Request& request, llvm::StringRef resource, std::string& error
         }
     }
     request.arguments.push_back("-resource-dir=" + resource.str());
-    request.arguments.push_back("-Xclang");
-    request.arguments.push_back("-detailed-preprocessing-record");
-    request.arguments.push_back(cl ? "/Zs" : "-fsyntax-only");
+    request.arguments.emplace_back("-Xclang");
+    request.arguments.emplace_back("-detailed-preprocessing-record");
+    request.arguments.emplace_back(cl ? "/Zs" : "-fsyntax-only");
     return true;
 }
 
@@ -722,26 +731,32 @@ public:
             ambiguous = true;
         declaration = candidate;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitNamedDecl(clang::NamedDecl* d) {
         consider(d, d->getLocation());
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitDeclRefExpr(clang::DeclRefExpr* e) {
         consider(e->getDecl(), e->getLocation());
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitMemberExpr(clang::MemberExpr* e) {
         consider(e->getMemberDecl(), e->getMemberLoc());
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitTagTypeLoc(clang::TagTypeLoc t) {
         consider(t.getDecl(), t.getNameLoc());
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitTypedefTypeLoc(clang::TypedefTypeLoc t) {
         consider(t.getTypePtr()->getDecl(), t.getNameLoc());
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitTemplateSpecializationTypeLoc(clang::TemplateSpecializationTypeLoc t) {
         consider(t.getTypePtr()->getTemplateName().getAsTemplateDecl(), t.getTemplateNameLoc());
         return true;
@@ -754,6 +769,7 @@ class ProjectMethods final : public clang::RecursiveASTVisitor<ProjectMethods> {
 public:
     std::vector<std::pair<std::vector<std::string>, std::vector<std::string>>> edges;
     explicit ProjectMethods(clang::ASTContext& ctx) : context(ctx) {}
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitCXXMethodDecl(clang::CXXMethodDecl* method) {
         for (const auto* base : method->overridden_methods())
             edges.emplace_back(projectUsrs(method, context), projectUsrs(base, context));
@@ -839,26 +855,32 @@ public:
         if (llvm::isa<clang::CXXDestructorDecl>(spelledDeclaration))
             destructors[path].insert(offset);
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitNamedDecl(clang::NamedDecl* d) {
         consider(d, d->getLocation());
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitDeclRefExpr(clang::DeclRefExpr* e) {
         consider(e->getDecl(), e->getLocation());
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitMemberExpr(clang::MemberExpr* e) {
         consider(e->getMemberDecl(), e->getMemberLoc());
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitTagTypeLoc(clang::TagTypeLoc t) {
         consider(t.getDecl(), t.getNameLoc());
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitTypedefTypeLoc(clang::TypedefTypeLoc t) {
         consider(t.getTypePtr()->getDecl(), t.getNameLoc());
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitTemplateSpecializationTypeLoc(clang::TemplateSpecializationTypeLoc t) {
         consider(t.getTypePtr()->getTemplateName().getAsTemplateDecl(), t.getTemplateNameLoc());
         return true;
@@ -891,7 +913,7 @@ std::unique_ptr<clang::ASTUnit> projectAST(const clang::tooling::CompileCommand&
                                            Diagnostics& diagnostics) {
     ProjectCommand database(command);
     std::vector<std::string> files{command.Filename};
-    clang::tooling::ClangTool tool(database, files, std::make_shared<clang::PCHContainerOperations>(), fs);
+    clang::tooling::ClangTool tool(database, files, std::make_shared<clang::PCHContainerOperations>(), std::move(fs));
     tool.setDiagnosticConsumer(&diagnostics);
     tool.appendArgumentsAdjuster(clang::tooling::getClangStripDependencyFileAdjuster());
     for (const auto& [path, bytes] : changes)
@@ -1006,8 +1028,8 @@ llvm::json::Object projectPlan(const llvm::json::Object& input, llvm::StringRef 
             args.push_back(arg.str());
         }
         args.push_back("-resource-dir=" + resource.str());
-        args.push_back("-fno-implicit-modules");
-        args.push_back("-fno-implicit-module-maps");
+        args.emplace_back("-fno-implicit-modules");
+        args.emplace_back("-fno-implicit-module-maps");
         command.CommandLine = std::move(args);
     }
     if (!hasSeed)

@@ -9,14 +9,14 @@ namespace frost::engine {
 namespace {
 using rpc::Json;
 #ifdef _WIN32
-const std::string root = "C:/binding-engine";
+constexpr const char* root = "C:/binding-engine";
 #else
-const std::string root = "/binding-engine";
+constexpr const char* root = "/binding-engine";
 #endif
 
 std::string path(std::string_view file) { return io::joinPath(root, file).value(); }
 
-SchemaLuaEntry entry(std::string qualified, std::uint32_t line, std::string alias = {}) {
+SchemaLuaEntry entry(const std::string& qualified, std::uint32_t line, std::string alias = {}) {
     SchemaLuaEntry result;
     result.qualifiedName = qualified;
     result.name = qualified.substr(qualified.find_last_of(".:") + 1);
@@ -110,7 +110,7 @@ TEST(BindingIndex, ForeignRegistrationAndArgumentOutsideCallAreRefused) {
     EXPECT_FALSE(BindingIndex::create(root, 1, schema, mappings));
 }
 
-Json range(std::string file, std::uint64_t offset, std::uint64_t length) {
+Json range(std::string_view file, std::uint64_t offset, std::uint64_t length) {
     return Json::object().set("path", path(file)).set("offset", offset).set("length", length);
 }
 

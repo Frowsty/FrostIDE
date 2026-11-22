@@ -47,14 +47,14 @@ AdapterFactory luaDebugAdapterFactory(LuaDebugConnection connection) {
 }
 AdapterFactory luaDebugAdapterFactory(std::uint16_t, std::string token, std::chrono::milliseconds, bool) {
     sodium_memzero(token.data(), token.size());
-    return [](DapHandlers) -> Result<std::unique_ptr<IDebugAdapterClient>> {
+    return [](const DapHandlers&) -> Result<std::unique_ptr<IDebugAdapterClient>> {
         return fail(ErrorCode::Unsupported, "the experimental Lua debug adapter has been retired");
     };
 }
 AdapterFactory luaDebugAdapterFactory(std::unique_ptr<io::LoopbackStream> stream, std::int64_t, std::uint64_t) {
     if (stream)
         stream->close();
-    return [](DapHandlers) -> Result<std::unique_ptr<IDebugAdapterClient>> {
+    return [](const DapHandlers&) -> Result<std::unique_ptr<IDebugAdapterClient>> {
         return fail(ErrorCode::Unsupported, "an experimental stream is not authenticated standard Lua DAP");
     };
 }

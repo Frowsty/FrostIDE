@@ -132,7 +132,7 @@ private:
     std::atomic<bool> m_closed{false};
 };
 Result<std::unique_ptr<IDapTransport>> connect(std::string_view endpoint, std::function<void()> cancel,
-                                               std::chrono::milliseconds timeout, std::stop_token stop) {
+                                               std::chrono::milliseconds timeout, const std::stop_token& stop) {
     if (endpoint.find('\0') != std::string_view::npos || timeout <= std::chrono::milliseconds::zero())
         return fail(ErrorCode::InvalidArgument, "Invalid CMake debugger endpoint or deadline");
 #ifdef _WIN32
@@ -194,7 +194,8 @@ Result<std::unique_ptr<IDapTransport>> connect(std::string_view endpoint, std::f
 class ConnectingTransport final : public IDapTransport {
 public:
     ConnectingTransport(std::string endpoint, std::function<void()> cancel, std::chrono::milliseconds timeout)
-        : m_cancel(std::move(cancel)), m_worker([this, endpoint = std::move(endpoint), timeout](std::stop_token stop) {
+        : m_cancel(std::move(cancel)),
+          m_worker([this, endpoint = std::move(endpoint), timeout](const std::stop_token& stop) {
               auto connected = connect(endpoint, {}, timeout, stop);
               {
                   std::lock_guard lock(m_mutex);

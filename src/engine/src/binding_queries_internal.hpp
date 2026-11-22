@@ -4,7 +4,7 @@
 #include "frost/engine/binding_queries.hpp"
 namespace frost::engine::binding_detail {
 [[nodiscard]] Result<void> validateRenameRequests(const std::vector<BindingRenameRequest>& requests,
-                                                  const BindingQueryAdmission& current, std::stop_token stop);
+                                                  const BindingQueryAdmission& current, const std::stop_token& stop);
 [[nodiscard]] sched::Task<Result<std::vector<BindingPreviewEdit>>>
 collectRenameEdits(std::vector<BindingRenameRequest> requests, std::vector<BindingDocumentCapture> documents,
                    BindingQueryAdmission current, std::stop_token stop);

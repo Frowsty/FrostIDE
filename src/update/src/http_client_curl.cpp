@@ -77,8 +77,9 @@ size_t headerCallback(char* buffer, size_t size, size_t nitems, void* userdata) 
         const auto firstSpace = line.find(' ');
         if (firstSpace != std::string_view::npos) {
             const auto rest = trimAscii(line.substr(firstSpace + 1));
+            const auto digits = rest.substr(0, 3);
             int code = 0;
-            std::from_chars(rest.data(), rest.data() + std::min<std::size_t>(rest.size(), 3), code);
+            std::from_chars(digits.data(), digits.data() + digits.size(), code);
             ctx->lastStatusCode = code;
         }
         return total;

@@ -81,7 +81,7 @@ void EngineIntegration::Impl::clearSessionTools() {
     if (performanceStatus)
         performanceStatus->setText(QStringLiteral("Pair a current trusted engine to request measured statistics"));
 }
-Result<void> EngineIntegration::showInFrostEditor(std::string path, bool openAsset) {
+Result<void> EngineIntegration::showInFrostEditor(const std::string& path, bool openAsset) {
     auto& impl = *m_impl;
     if (!impl.assetIndex)
         return fail(ErrorCode::NotFound, "Refresh the actual engine asset listing first");

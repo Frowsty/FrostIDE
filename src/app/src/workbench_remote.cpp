@@ -70,7 +70,7 @@ Result<std::optional<std::string>> readOptional(io::IFileSystem& fs, const std::
     return std::unexpected(bytes.error());
 }
 Result<void> saveRegistry(io::IFileSystem& fs, const std::string& path, const std::optional<std::string>& before,
-                          std::string bytes) {
+                          const std::string& bytes) {
     auto current = readOptional(fs, path);
     if (!current)
         return std::unexpected(current.error());
@@ -143,7 +143,7 @@ Result<std::shared_ptr<RemoteCapture>> captureEndpoint(io::IFileSystem& fs, proj
     capture->registryPhysical = *registryPhysical;
     capture->registryBytes = *bytes;
     capture->revision = trust.snapshot(capture->root).revision;
-    capture->projectStop = projectStop;
+    capture->projectStop = std::move(projectStop);
     for (const auto& mapping : target->mappings)
         if (auto identity = fs.physicalPath(mapping.localRoot))
             capture->mappingIdentities.emplace(mapping.localRoot, *identity);
@@ -157,7 +157,8 @@ public:
                              std::string root, std::string registry, std::string expectedBytes, std::string target,
                              std::uint64_t revision, std::stop_token stop)
         : m_fs(fs), m_trust(trust), m_local(local), m_root(std::move(root)), m_registry(std::move(registry)),
-          m_expectedBytes(std::move(expectedBytes)), m_target(std::move(target)), m_revision(revision), m_stop(stop) {}
+          m_expectedBytes(std::move(expectedBytes)), m_target(std::move(target)), m_revision(revision),
+          m_stop(std::move(stop)) {}
     Result<std::unique_ptr<io::IProcess>> launch(const io::ProcessSpec& spec) override {
         auto capture = captureEndpoint(m_fs, m_trust, m_root, m_registry, m_target, m_stop);
         if (!capture)
@@ -489,7 +490,6 @@ Result<run::RunHandlers> Workbench::prepareRemoteRun(const run::RunConfiguration
 void Workbench::showWslCMake() {
 #ifndef _WIN32
     notify("WSL CMake", "WSL build toolchains require the Windows IDE.", ui::NotificationKind::Warning);
-    return;
 #else
     if (!m_window || !m_pool || !m_buildService || m_projectRoot.empty() || m_remoteBuildActive)
         return;
@@ -611,7 +611,7 @@ void Workbench::showWslCMake() {
         notify("WSL CMake", q(reservation.error().message()), ui::NotificationKind::Warning);
         return;
     }
-    auto reserved = std::shared_ptr<Reservation>(new Reservation{m_buildService.get(), *reservation});
+    auto reserved = std::make_shared<Reservation>(m_buildService.get(), *reservation);
     if (m_services.settings.snapshot()->get(settings::key::buildSaveAllBeforeBuild)) {
         const auto saved = saveAllDocuments();
         if (!saved.failed.empty()) {
@@ -728,7 +728,7 @@ void Workbench::showWslCMake() {
                                                       diagnostic.file, std::move(result)))
             .detach();
     });
-    auto deliver = [self, owner, view, root, generation](build::RunStream channel, std::string text) {
+    auto deliver = [self, owner, view, root, generation](build::RunStream channel, const std::string& text) {
         if (self && owner && self->m_remoteBuildGeneration == generation && self->m_projectRoot == root)
             view->feed(channel, text);
     };

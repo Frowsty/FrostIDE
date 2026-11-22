@@ -86,6 +86,7 @@ void DocumentRegistry::unsubscribe(std::uint64_t id) {
 
 void DocumentRegistry::notifyChanged(const std::string& path) {
     // A listener may close the document that owns the input path, or unsubscribe while it runs.
+    // NOLINTNEXTLINE(performance-unnecessary-copy-initialization): listener may destroy path owner.
     const std::string identity = path;
     const auto listeners = m_listeners;
     for (const auto& [id, listener] : listeners) {

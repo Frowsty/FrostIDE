@@ -54,7 +54,7 @@ inline std::string engineCorporaRoot() {
 // Missing setup is an error, never a GTEST_SKIP or an environment-dependent success.
 class RealEngineBuild {
 public:
-    [[nodiscard]] Result<void> prepare(std::vector<std::string> targets = {"FrostEditor"}) {
+    [[nodiscard]] Result<void> prepare(const std::vector<std::string>& targets = {"FrostEditor"}) {
         disableCrashDialogs();
         const std::string root = engineCorporaRoot();
         if (root.empty())

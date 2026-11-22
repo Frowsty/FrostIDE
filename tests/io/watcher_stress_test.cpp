@@ -23,9 +23,11 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <charconv>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <format>
 #include <memory>
 #include <random>
@@ -215,9 +217,13 @@ TEST(WatcherStress, OverflowRounds) {
 #else
     std::size_t burst = 8292; // Half of the default max_queued_events, plus room: each create is 3 events.
     if (std::FILE* file = std::fopen("/proc/sys/fs/inotify/max_queued_events", "r"); file != nullptr) {
-        unsigned long long value = 0;
-        if (std::fscanf(file, "%llu", &value) == 1 && value < 200'000) {
-            burst = static_cast<std::size_t>(value / 2 + 100);
+        char buffer[64]{};
+        if (std::fgets(buffer, static_cast<int>(sizeof(buffer)), file) != nullptr) {
+            std::uint64_t value = 0;
+            const auto* const end = buffer + std::strlen(buffer);
+            if (std::from_chars(buffer, end, value).ec == std::errc{} && value < 200'000) {
+                burst = static_cast<std::size_t>(value / 2 + 100);
+            }
         }
         std::fclose(file);
     }

@@ -13,7 +13,7 @@ using Entries = std::vector<Entry>;
 class CapturedDirectoryIterator final : public llvm::vfs::detail::DirIterImpl {
 public:
     explicit CapturedDirectoryIterator(std::shared_ptr<const Entries> entries) : m_entries(std::move(entries)) {
-        increment();
+        (void)increment();
     }
     std::error_code increment() override {
         CurrentEntry = m_next < m_entries->size() ? (*m_entries)[m_next++] : Entry{};

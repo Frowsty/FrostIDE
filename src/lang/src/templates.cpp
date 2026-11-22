@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <ranges>
 
 namespace frost::lang {
 namespace {
@@ -221,8 +222,8 @@ Result<TemplateAdvance> advanceTemplate(const LiveTemplateSession& session, std:
     for (const auto& stop : mirrors)
         result.edits.push_back({stop.begin, stop.end, value});
     std::string after(edited);
-    for (auto it = result.edits.rbegin(); it != result.edits.rend(); ++it)
-        after.replace(it->begin, it->end - it->begin, it->text);
+    for (const auto& edit : std::views::reverse(result.edits))
+        after.replace(edit.begin, edit.end - edit.begin, edit.text);
     for (auto& stop : result.next.expected.tabStops) {
         std::int64_t shift = 0;
         for (const auto& edit : result.edits) {

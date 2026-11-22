@@ -132,7 +132,7 @@ Result<DebugSessionId> DebugSessionRegistry::startTarget(const debug::DebugTarge
 }
 Result<DebugSessionId> DebugSessionRegistry::attachTarget(const debug::DebugTarget& target,
                                                           debug::AdapterFactory factory, rpc::Json arguments,
-                                                          std::function<bool()> admission, DebugGroupId group) {
+                                                          const std::function<bool()>& admission, DebugGroupId group) {
     auto id = createSession(QString::fromStdString(target.name), group);
     if (!id) {
         if (group)
@@ -145,8 +145,7 @@ Result<DebugSessionId> DebugSessionRegistry::attachTarget(const debug::DebugTarg
             rollbackGroup(group);
         return fail(ErrorCode::Cancelled, "The debugger session was closed before attach");
     }
-    auto started =
-        targetController->attachTarget(target, std::move(factory), std::move(arguments), std::move(admission));
+    auto started = targetController->attachTarget(target, std::move(factory), std::move(arguments), admission);
     if (!started) {
         if (group)
             rollbackGroup(group);

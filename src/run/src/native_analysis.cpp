@@ -56,10 +56,10 @@ Result<void> validateAnalysisIdentity(io::IFileSystem& fs, const AnalysisFileIde
     return {};
 }
 Result<AnalysisCommandResult> runAnalysisCommand(io::IProcessLauncher& launcher, io::ProcessSpec spec,
-                                                 std::stop_token stop, AnalysisAdmission admission,
+                                                 const std::stop_token& stop, const AnalysisAdmission& admission,
                                                  std::optional<IClock::Duration> timeout, std::size_t outputCap,
-                                                 std::function<void(io::ProcessId)> onStarted,
-                                                 AnalysisAdmission liveAdmission) {
+                                                 const std::function<void(io::ProcessId)>& onStarted,
+                                                 const AnalysisAdmission& liveAdmission) {
     if (!io::isAbsolutePath(spec.executable) || !io::isAbsolutePath(spec.workingDirectory) || !outputCap ||
         outputCap > 64U * 1024U * 1024U || (timeout && *timeout <= IClock::Duration::zero()))
         return fail(ErrorCode::InvalidArgument,

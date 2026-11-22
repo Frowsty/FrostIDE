@@ -55,7 +55,7 @@ TEST(SceneMergeDialog, ChangedChoiceMustBeRevalidatedBeforeApply) {
     drive.start();
     auto merged = showSceneMerge(
         &owner, std::move(source),
-        [&](SceneMergeSnapshot snapshot, std::stop_token) -> Result<SceneMergeSnapshot> {
+        [&](SceneMergeSnapshot snapshot, const std::stop_token&) -> Result<SceneMergeSnapshot> {
             ++refreshes;
             EXPECT_EQ(snapshot.request.choices.size(), 1U);
             if (snapshot.request.choices.size() != 1)
@@ -81,7 +81,7 @@ TEST(SceneMergeDialog, OwnerDestructionCancelsWorkerAndWaitsForExit) {
     auto owner = std::make_unique<QWidget>();
     bool exited = false;
     QTimer::singleShot(0, [&] { owner.reset(); });
-    auto result = sceneMergeInBackground(owner.get(), [&](std::stop_token stop) -> Result<SceneMergeSnapshot> {
+    auto result = sceneMergeInBackground(owner.get(), [&](const std::stop_token& stop) -> Result<SceneMergeSnapshot> {
         while (!stop.stop_requested())
             std::this_thread::yield();
         exited = true;

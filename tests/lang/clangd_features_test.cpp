@@ -36,6 +36,7 @@
 #include <chrono>
 #include <format>
 #include <memory>
+#include <ranges>
 #include <string>
 #include <thread>
 #include <vector>
@@ -365,8 +366,8 @@ std::string clangFormatCli(const std::string& file, std::vector<std::string> ext
 
 // `text` with byte edits applied (sorted ascending, as toByteEdits returns them).
 std::string applyBytes(std::string text, const std::vector<fl::ByteEdit>& edits) {
-    for (auto it = edits.rbegin(); it != edits.rend(); ++it) {
-        text.replace(it->range.begin.value(), it->range.size(), it->text);
+    for (const auto& edit : std::views::reverse(edits)) {
+        text.replace(edit.range.begin.value(), edit.range.size(), edit.text);
     }
     return text;
 }

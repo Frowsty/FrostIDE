@@ -152,7 +152,7 @@ Result<document::RefactoringPlan> Workbench::prepareProjectSourceRename(const st
         [fs, launcher, trustStore, trust, oldPath, newPath, root, open = std::move(open),
          projects = std::move(projects), host = std::move(host), msbuild = std::move(msbuild), hostBlocked, cmakeModel,
          label, previews,
-         hasSolution = bool(solution)](std::stop_token stop) mutable -> Result<document::RefactoringPlan> {
+         hasSolution = bool(solution)](const std::stop_token& stop) mutable -> Result<document::RefactoringPlan> {
             TrustedProjectLauncher admitted(*launcher, *trustStore, root, trust.revision, stop);
             auto move = lang::planFmetaMove(*fs, oldPath, newPath);
             if (!move)

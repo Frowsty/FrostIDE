@@ -44,7 +44,7 @@ private:
                                                             const DependencyConsent&);
     friend Result<io::ProcessResult> installDependencies(io::IFileSystem&, io::IProcessLauncher&,
                                                          const project::TrustStore&, const DependencyConsent&,
-                                                         std::stop_token);
+                                                         const std::stop_token&);
 };
 // Call only after displaying this exact command/input/output plan and receiving explicit consent.
 [[nodiscard]] Result<DependencyConsent> consentDependencies(const DependencyPlan& plan,
@@ -56,6 +56,6 @@ private:
 [[nodiscard]] Result<io::ProcessResult> installDependencies(io::IFileSystem& fs, io::IProcessLauncher& launcher,
                                                             const project::TrustStore& trust,
                                                             const DependencyConsent& consent,
-                                                            std::stop_token stop = {});
+                                                            const std::stop_token& stop = {});
 [[nodiscard]] project::CMakeProfileRecord dependencyCmakeProfile(const DependencyPlan& plan);
 } // namespace frost::build

@@ -25,7 +25,7 @@ public:
     [[nodiscard]] static Result<std::shared_ptr<LinuxPeer>> select(std::uint32_t pid, std::function<bool()> current);
     [[nodiscard]] LinuxProcessIdentity identity() const;
     [[nodiscard]] Result<void> verify(std::uint16_t localPort, std::uint16_t remotePort, MonoDeadline deadline,
-                                      std::stop_token stop) const;
+                                      const std::stop_token& stop) const;
     ~LinuxPeer();
     struct Impl;
 

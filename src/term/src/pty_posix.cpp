@@ -150,9 +150,8 @@ void killSession(pid_t session) noexcept {
 class PosixPty final : public IPty {
 public:
     PosixPty(Fd master, Fd wakeRead, Fd wakeWrite, std::unique_ptr<io::IProcess> process)
-        : m_master(std::move(master)), m_wakeRead(std::move(wakeRead)), m_wakeWrite(std::move(wakeWrite)),
-          m_process(std::move(process)) {
-        m_masterFd = m_master.get();
+        : m_master(std::move(master)), m_masterFd(m_master.get()), m_wakeRead(std::move(wakeRead)),
+          m_wakeWrite(std::move(wakeWrite)), m_process(std::move(process)) {
         m_reader = std::thread([this] { drain(); });
     }
     ~PosixPty() override { close(); }

@@ -17,7 +17,7 @@ public:
     // worker without launching the engine. Its phased start owns the native host, waits actual PID,
     // config ACK/private mutual authentication, then waits Lua configuration/actual start receipt.
     // All services outlive this coordinator; raw startup data never appears in snapshot/diagnostics.
-    [[nodiscard]] Result<void> prepare(const run::RunConfiguration& configuration, std::stop_token stop,
+    [[nodiscard]] Result<void> prepare(const run::RunConfiguration& configuration, const std::stop_token& stop,
                                        MultiSessionDebugCoordinator::Prepared done);
     void cancel();                             // Only its groups/native host leases; external attaches remain unowned.
     [[nodiscard]] lang::Json snapshot() const; // Actual phase/IDs/PID only, no invented frames/results.

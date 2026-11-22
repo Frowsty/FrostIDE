@@ -91,7 +91,7 @@ TEST(CoreClrDap, LaunchRejectsUntrustedWorkingDirectoryBeforeAdapterCreation) {
                          .assembly = test::workPath("project/App.dll"),
                          .workingDirectory = test::workPath("other")};
     int calls = 0;
-    AdapterFactory factory = [&calls](DapHandlers) -> Result<std::unique_ptr<IDebugAdapterClient>> {
+    AdapterFactory factory = [&calls](const DapHandlers&) -> Result<std::unique_ptr<IDebugAdapterClient>> {
         ++calls;
         return fail(ErrorCode::Unknown, "unexpected adapter start");
     };

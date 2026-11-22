@@ -43,22 +43,21 @@ bool sameEntry(const EngineLogEntry& a, const EngineLogEntry& b) {
 } // namespace
 
 EngineConsole::EngineConsole(QWidget* parent, std::size_t maxEntries, std::size_t maxBytes)
-    : QWidget(parent), m_maxEntries(std::max(std::size_t{1}, maxEntries)), m_maxBytes(maxBytes) {
+    : QWidget(parent), m_view(new QTreeWidget(this)), m_search(new QLineEdit(this)), m_logger(new QLineEdit(this)),
+      m_method(new QLineEdit(this)), m_level(new QComboBox(this)), m_droppedText(new QLabel(this)),
+      m_maxEntries(std::max(std::size_t{1}, maxEntries)), m_maxBytes(maxBytes) {
     setObjectName(QStringLiteral("engineConsole"));
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     auto* filters = new QHBoxLayout;
-    m_level = new QComboBox(this);
     m_level->setObjectName(QStringLiteral("engineLogLevel"));
     m_level->setAccessibleName(tr("Minimum log level"));
     for (const EngineLogLevel level : {EngineLogLevel::Trace, EngineLogLevel::Debug, EngineLogLevel::Info,
                                        EngineLogLevel::Warning, EngineLogLevel::Error, EngineLogLevel::Critical})
         m_level->addItem(levelName(level), static_cast<int>(level));
-    m_logger = new QLineEdit(this);
     m_logger->setObjectName(QStringLiteral("engineLogLogger"));
     m_logger->setPlaceholderText(tr("Logger"));
     m_logger->setAccessibleName(tr("Filter logger"));
-    m_search = new QLineEdit(this);
     m_search->setObjectName(QStringLiteral("engineLogSearch"));
     m_search->setPlaceholderText(tr("Search engine logs"));
     m_search->setAccessibleName(tr("Search engine logs"));
@@ -81,7 +80,6 @@ EngineConsole::EngineConsole(QWidget* parent, std::size_t maxEntries, std::size_
     clearButton->setObjectName(QStringLiteral("engineLogClear"));
     auto* copyButton = new QPushButton(tr("Copy"), this);
     copyButton->setObjectName(QStringLiteral("engineLogCopy"));
-    m_droppedText = new QLabel(this);
     m_droppedText->setTextFormat(Qt::PlainText);
     options->addWidget(m_autoscroll);
     options->addWidget(m_collapse);
@@ -90,7 +88,6 @@ EngineConsole::EngineConsole(QWidget* parent, std::size_t maxEntries, std::size_
     options->addWidget(copyButton);
     options->addWidget(m_droppedText, 1);
     layout->addLayout(options);
-    m_view = new QTreeWidget(this);
     m_view->setObjectName(QStringLiteral("engineLogView"));
     m_view->setHeaderLabels({tr("Time"), tr("Level"), tr("Logger"), tr("Message")});
     m_view->setUniformRowHeights(true);
@@ -102,7 +99,6 @@ EngineConsole::EngineConsole(QWidget* parent, std::size_t maxEntries, std::size_
     m_view->installEventFilter(this);
     layout->addWidget(m_view, 1);
     auto* command = new QHBoxLayout;
-    m_method = new QLineEdit(this);
     m_method->setObjectName(QStringLiteral("engineCommandMethod"));
     m_method->setPlaceholderText(tr("Command method"));
     m_method->setAccessibleName(tr("Engine command method"));

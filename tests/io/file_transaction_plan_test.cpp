@@ -138,7 +138,7 @@ TEST(FileTransactionPlan, DuplicateIdsArtifactWritersAndPhysicalAliasesAreReject
     value.operations.back() = second;
     value.operations.back().artifact = first.artifact;
     invalid(value);
-    value.operations.back() = second;
+    value.operations.back() = std::move(second);
     std::get<FilePlanDelete>(value.operations.back().effect).before.object = beforeFile().object;
     invalid(value);
 }
@@ -248,7 +248,7 @@ TEST(FileTransactionPlan, ParentDeclarationsMustAgreeWithinRenameAndAcrossIndepe
     destination.caseRule = FilePlanCaseRule::Insensitive;
     invalid(plan(operation(FilePlanRename{beforeFile(), FilePlanAbsent{destination}})));
     auto second = beforeFile();
-    second.endpoint = destination;
+    second.endpoint = std::move(destination);
     second.object.object = "different-object";
     auto value = plan(operation(FilePlanDelete{beforeFile()}));
     value.operations.push_back(operation(FilePlanDelete{second}, 2));

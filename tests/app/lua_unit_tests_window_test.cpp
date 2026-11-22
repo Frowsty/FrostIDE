@@ -28,7 +28,7 @@ TEST(LuaUnitTestsWindow, ActualDiscoveryFeedsTreeGutterAndSameInterpreterSelecte
     config.program = FROST_TEST_LUA_INTERPRETER;
     config.target = std::string(FROST_LUA_FRAMEWORK_FIXTURES) + "/luaunit_driver.lua";
     config.workingDirectory = dir.path();
-    config.environment = {{"LUA_PATH", *luaPath}};
+    config.environment = {{"LUA_PATH", luaPath}};
     std::stop_source lifetime;
     std::optional<run::RunConfiguration> debugged;
     app::LuaUnitTestsContext context;

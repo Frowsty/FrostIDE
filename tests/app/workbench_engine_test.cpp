@@ -383,7 +383,7 @@ TEST(Workbench, RenamingOrMovingAnAssetMovesItsFmetaSidecar) {
             5s));
 
         std::atomic<bool> completeAtSettlement{false};
-        std::jthread settlement([&](std::stop_token stop) {
+        std::jthread settlement([&](const std::stop_token& stop) {
             const auto deadline = std::chrono::steady_clock::now() + 60s;
             while (!stop.stop_requested() && peer.requests("assets.finish-move-plan").empty() &&
                    std::chrono::steady_clock::now() < deadline)
@@ -2268,7 +2268,7 @@ TEST(WorkbenchEngine, Il2cppNativePickerRevocationNeverStartsAdapter) {
                                                    dir.join("GameAssembly.pdb"), dir.join("generated"), ""}};
     };
     options.workbench.debugAdapterFactory =
-        [&](frost::debug::DapHandlers) -> frost::Result<std::unique_ptr<frost::debug::IDebugAdapterClient>> {
+        [&](const frost::debug::DapHandlers&) -> frost::Result<std::unique_ptr<frost::debug::IDebugAdapterClient>> {
         adapterStarted = true;
         return frost::fail(frost::ErrorCode::IoError, "must not start");
     };

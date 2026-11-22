@@ -299,13 +299,13 @@ TEST(LanguageControllerRefactoring, PreviewAppearsBeforeSemanticCheckAndCancelSt
     Rig rig(server, host);
     std::stop_token cancellation;
     std::function<void(frost::Result<void>)> complete;
-    rig.controller.setCppRenameCheck([&](std::string selectedPath, fl::LspPosition, std::string name,
-                                         fl::WorkspaceEdit required, fl::WorkspaceEdit offered, std::stop_token stop,
-                                         std::function<void(frost::Result<void>)> done) {
+    rig.controller.setCppRenameCheck([&](const std::string& selectedPath, fl::LspPosition, const std::string& name,
+                                         const fl::WorkspaceEdit& required, const fl::WorkspaceEdit& offered,
+                                         std::stop_token stop, std::function<void(frost::Result<void>)> done) {
         EXPECT_EQ(selectedPath, path);
         EXPECT_EQ(name, "newName");
         EXPECT_EQ(required, offered);
-        cancellation = stop;
+        cancellation = std::move(stop);
         complete = std::move(done);
     });
     rig.controller.rename();
@@ -391,8 +391,10 @@ TEST(LanguageControllerRequests, CapturingFactorySurvivesDeferredStartSuspension
                 }
                 co_return static_cast<int>(payload->size());
             };
-            auto factory = [coroutine = std::move(coroutine), payloadLifetime, &executor, &observed](
-                               std::stop_token token) { return coroutine(payloadLifetime, executor, observed, token); };
+            auto factory = [coroutine = std::move(coroutine), payloadLifetime, &executor,
+                            &observed](const std::stop_token& token) {
+                return coroutine(payloadLifetime, executor, observed, token);
+            };
             frost::ui::lang::LanguageControllerTestAccess::startInteger(
                 controller, slot, std::move(factory),
                 [&](frost::Result<int> result) { delivered.emplace(std::move(result)); });
@@ -1701,7 +1703,7 @@ TEST(LanguageControllerRefactoring, ChangeSignatureUsesExplicitParameterEditorRa
     FakeHost host("int f(int value){return value;}", workPath("main.cpp"));
     Rig rig(server, host);
     std::vector<std::string> operations;
-    rig.controller.setCppAstRefactoring([&](std::string operation) { operations.push_back(operation); });
+    rig.controller.setCppAstRefactoring([&](const std::string& operation) { operations.push_back(operation); });
     rig.controller.changeSignature();
     EXPECT_EQ(operations, (std::vector<std::string>{"edit-signature"}));
     EXPECT_TRUE(rig.applier.edits.empty());
@@ -1722,7 +1724,7 @@ TEST(LanguageControllerRefactoring, NativeCreateUsageChoicePreservesPreChoiceSna
         }};
     });
     std::vector<std::string> operations;
-    rig.controller.setCppAstRefactoring([&](std::string operation) { operations.push_back(operation); });
+    rig.controller.setCppAstRefactoring([&](const std::string& operation) { operations.push_back(operation); });
     rig.controller.createFromUsage();
     auto& choice = rig.controller.choicePopup();
     ASSERT_TRUE(choice.isVisible());
@@ -1743,7 +1745,7 @@ TEST(LanguageControllerRefactoring, PublishedAndModuleFixScopeHaveDifferentExpli
     FakeHost host("int main(){return 0;}", workPath("main.cpp"));
     Rig rig(server, host);
     std::vector<std::string> operations;
-    rig.controller.setCppAstRefactoring([&](std::string operation) { operations.push_back(operation); });
+    rig.controller.setCppAstRefactoring([&](const std::string& operation) { operations.push_back(operation); });
     unsigned published = 0;
     rig.controller.setCppPublishedScopeFix([&] { ++published; });
     rig.controller.fixPublishedDiagnostics();

@@ -72,8 +72,8 @@ public:
 
     void closeJsonDocument(std::string_view path);
     [[nodiscard]] bool handlesJsonDocument(std::string_view path) const { return m_json->handles(path); }
-    [[nodiscard]] Result<void> installEngineDocumentSchemas(std::string root, const lang::Json& schemas);
-    [[nodiscard]] Result<void> installEngineTableSchema(std::string path, const text::Snapshot& snapshot,
+    [[nodiscard]] Result<void> installEngineDocumentSchemas(const std::string& root, const lang::Json& schemas);
+    [[nodiscard]] Result<void> installEngineTableSchema(const std::string& path, const text::Snapshot& snapshot,
                                                         const lang::Json& reply);
     void setJsonAssetReferences(std::string root, lang::JsonAssetReferenceProvider provider) {
         m_json->setAssetReferences(std::move(root), std::move(provider));

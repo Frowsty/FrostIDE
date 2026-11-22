@@ -20,9 +20,9 @@ public:
     // Caller authenticates/rechecks the selected engine identity. One selected project at a time;
     // clear on disconnect/trust/project change. Only the documented bounded structural subset is
     // interpreted locally; authoritative semantic diagnostics still come from document.validate.
-    [[nodiscard]] Result<void> installEngineSchemas(std::string projectRoot, const Json& actualExport);
+    [[nodiscard]] Result<void> installEngineSchemas(const std::string& projectRoot, const Json& actualExport);
     // Retains actual schema.info row shape only while this captured table Schema reference matches.
-    [[nodiscard]] Result<void> installEngineTableSchema(std::string absolutePath, const text::Snapshot&,
+    [[nodiscard]] Result<void> installEngineTableSchema(const std::string& absolutePath, const text::Snapshot&,
                                                         const Json& actualExport);
     void clearEngineSchemas();
     // Actual index callbacks own their immutable listing. Empty root/provider revokes all queries.
@@ -32,7 +32,7 @@ public:
     void setDeclarationReader(DeclarationReader);
     [[nodiscard]] bool handles(std::string_view path) const;
     [[nodiscard]] std::uint64_t schemaGeneration() const;
-    void updateDocument(std::string path, text::Snapshot snapshot);
+    void updateDocument(const std::string& path, text::Snapshot snapshot);
     void removeDocument(std::string_view path);
     [[nodiscard]] std::optional<Json> snapshotValidationSchema(std::string_view path) const;
     [[nodiscard]] std::vector<SnapshotValidationIssue> snapshotIssues(std::string_view path) const;

@@ -81,14 +81,18 @@ QByteArray fixtureMac(std::string_view key, std::initializer_list<std::string_vi
 class UnityServer {
 public:
     UnityServer(std::string project, std::string session, std::string token, bool playing)
-        : root(std::move(project)), id(std::move(session)), secret(std::move(token)), playing(playing) {
+        :
+#ifndef _WIN32
+          listener(socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)),
+#endif
+          root(std::move(project)), id(std::move(session)), secret(std::move(token)), playing(playing) {
 #ifdef _WIN32
         WSADATA data{};
         if (WSAStartup(MAKEWORD(2, 2), &data) != 0)
             return;
         initialized = true;
-#endif
         listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+#endif
         if (listener == invalidSocket)
             return;
         sockaddr_in addr{};

@@ -381,7 +381,7 @@ void Workbench::registerCppIndexActions() {
         (void)m_registry.add(std::move(action));
     }
 }
-void Workbench::showCppIndex(std::string operation, std::string symbol) {
+void Workbench::showCppIndex(const std::string& operation, std::string symbol) {
     if (m_shutDown || !m_clangd || !m_pool || !m_reactor || m_projectRoot.empty())
         return;
     const auto permission = m_services.trust.snapshot(m_projectRoot);
@@ -549,7 +549,7 @@ void Workbench::showCppIndex(std::string operation, std::string symbol) {
                                                : QStringLiteral("C++ module dependencies - scanner snapshot"));
                     auto* layout = new QVBoxLayout(output);
                     auto* tabs = new QTabWidget(output);
-                    const auto add = [&](QString title, const std::string& bytes) {
+                    const auto add = [&](const QString& title, const std::string& bytes) {
                         auto* text = new QPlainTextEdit(tabs);
                         text->setReadOnly(true);
                         text->setPlainText(display(bytes));

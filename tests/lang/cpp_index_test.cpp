@@ -19,7 +19,7 @@ protected:
         ASSERT_TRUE(frost::io::realFileSystem().writeFileAtomic(source, bytes));
         ASSERT_TRUE(frost::io::realFileSystem().writeFileAtomic(header, include));
     }
-    frost::lang::CppIndexUnit unit(char identity, std::string name = "symbol") {
+    frost::lang::CppIndexUnit unit(char identity, const std::string& name = "symbol") {
         const auto usr = "c:@" + name;
         auto data = Json::object()
                         .set("kind", "frost-semantic-index")

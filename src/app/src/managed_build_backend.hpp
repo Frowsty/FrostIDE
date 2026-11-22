@@ -14,7 +14,7 @@ public:
                         std::uint64_t trustRevision, io::IFileSystem&, io::IProcessLauncher&, project::TrustStore&,
                         build::BuildService&, sched::ThreadPool&, std::vector<sched::JoinHandle<void>>&,
                         build::BuildServiceCallbacks);
-    ~ManagedBuildBackend();
+    ~ManagedBuildBackend() override;
     Result<void> openSolution(std::shared_ptr<const project::SolutionModel>) override {
         return fail(ErrorCode::Unsupported, "An evaluated SDK context is selected");
     }
@@ -31,8 +31,8 @@ public:
     build::BuildState state() const override { return m_state; }
     std::vector<std::string> untrustedRoots() const override;
     std::vector<build::BuildDiagnostic> diagnostics() const override { return m_diagnostics; }
-    void finish(build::BuildOutcome);
-    void diagnostic(build::BuildDiagnostic);
+    void finish(const build::BuildOutcome&);
+    void diagnostic(const build::BuildDiagnostic&);
 
 private:
     void setState(build::BuildState);

@@ -22,11 +22,11 @@ void EngineIntegration::Impl::clearAssetUsages() {
             view->editor().setCodeVisionLensesForProvider("engine.asset", {});
 }
 void EngineIntegration::invalidateAssetUsages() { m_impl->clearAssetUsages(); }
-Result<std::uint64_t> EngineIntegration::contentCommand(std::string method, lang::Json params,
+Result<std::uint64_t> EngineIntegration::contentCommand(const std::string& method, lang::Json params,
                                                         std::function<void(Result<lang::Json>)> completed) {
-    return m_impl->send(std::move(method), std::move(params), std::move(completed));
+    return m_impl->send(method, std::move(params), std::move(completed));
 }
-Result<void> EngineIntegration::Impl::findAssetUsages(std::string relative, engine::EngineHandle handle) {
+Result<void> EngineIntegration::Impl::findAssetUsages(const std::string& relative, engine::EngineHandle handle) {
     if (!assetIndex)
         return fail(ErrorCode::NotFound, "Refresh the actual engine asset index first");
     const auto* asset = assetIndex->find(handle);

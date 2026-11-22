@@ -66,7 +66,6 @@
 
 #include <csignal>
 
-#include <signal.h>
 #include <unistd.h>
 #endif
 

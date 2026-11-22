@@ -57,8 +57,9 @@ public:
             return parent;
         return io::realFileSystem().writeFileAtomic(*path, bytes);
     }
-    Result<io::ProcessResult> command(std::string tag, std::string executable, std::vector<std::string> arguments,
-                                      std::string directory, std::chrono::milliseconds timeout = 5min) const {
+    Result<io::ProcessResult> command(const std::string& tag, std::string executable,
+                                      std::vector<std::string> arguments, std::string directory,
+                                      std::chrono::milliseconds timeout = 5min) const {
         io::ProcessSpec spec;
         spec.executable = std::move(executable);
         spec.arguments = std::move(arguments);
@@ -86,11 +87,11 @@ public:
 
 inline Result<std::string> disposableClone(Evidence& evidence, const std::string& pinned) {
     const auto root = io::joinPath(evidence.root, "corpora").value_or("");
-    const auto invoke = [&](std::string tag, std::vector<std::string> tail) -> Result<void> {
+    const auto invoke = [&](const std::string& tag, std::vector<std::string> tail) -> Result<void> {
         std::vector<std::string> args{"-B", FROST_BINDING_CORPORA_SCRIPT, "--repo", FROST_BINDING_REPO_ROOT, "--root",
                                       root};
         args.insert(args.end(), tail.begin(), tail.end());
-        auto result = evidence.command(std::move(tag), FROST_TEST_PYTHON, std::move(args), evidence.root, 1h);
+        auto result = evidence.command(tag, FROST_TEST_PYTHON, std::move(args), evidence.root, 1h);
         if (!result)
             return std::unexpected(result.error());
         if (result->exitCode != 0)
@@ -119,7 +120,7 @@ inline Result<std::string> disposableClone(Evidence& evidence, const std::string
 inline Result<void> build(Evidence& evidence, const std::string& clone, bool tests) {
     std::vector<std::string> args{"-B", clone + "/Scripts/Build.py", "--preset", FROST_CORPUS_FROSTENGINE_PRESET};
     if (tests)
-        args.push_back("--test"); // Preserve the complete real engine test suite, including embedded-Lua tests.
+        args.emplace_back("--test"); // Preserve the complete real engine test suite, including embedded-Lua tests.
     else
         args.insert(args.end(), {"--target", "FrostEditor"});
     auto result = evidence.command(tests ? "reviewed-preview-build-tests" : "documented-fixture-baseline-build",

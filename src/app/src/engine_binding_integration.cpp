@@ -449,7 +449,7 @@ struct EngineBindingIntegration::Impl {
             }
         });
     }
-    bool interceptRename(std::string path, lang::LspPosition position, std::string name,
+    bool interceptRename(const std::string& path, lang::LspPosition position, std::string name,
                          std::function<void()> ordinary) {
         if (stopped || !isLuaSource(path) || !workbench.m_lua || workbench.m_lua->state() != lang::LuaState::Running ||
             !workbench.currentView() || !ordinary)
@@ -672,8 +672,8 @@ EngineBindingIntegration::EngineBindingIntegration(Workbench& workbench,
     });
     workbench.m_language->setCombinedBindingUsagesHandler([this] { return tryFindUsages(); });
     workbench.m_language->setCombinedBindingRenameHandler(
-        [this](std::string path, lang::LspPosition position, std::string name, std::function<void()> ordinary) {
-            return m_impl->interceptRename(std::move(path), position, std::move(name), std::move(ordinary));
+        [this](const std::string& path, lang::LspPosition position, std::string name, std::function<void()> ordinary) {
+            return m_impl->interceptRename(path, position, std::move(name), std::move(ordinary));
         });
     for (const auto& [id, name, operation] :
          {std::tuple{"engine.bindings.refresh", "Refresh Engine Bindings", 0},

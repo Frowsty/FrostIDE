@@ -37,7 +37,7 @@ public:
     // Optional engine adapter provider. nullopt delegates to the workspace's native preparation.
     // Frozen per launch; changing the provider affects only later launches. GUI thread callbacks.
     void setAdditionalPrepare(AdditionalPrepare prepare) { m_additional = std::move(prepare); }
-    MultiSessionDebugCoordinator(ui::DebugSessionRegistry& sessions, QObject* parent = nullptr);
+    explicit MultiSessionDebugCoordinator(ui::DebugSessionRegistry& sessions, QObject* parent = nullptr);
     ~MultiSessionDebugCoordinator() override;
     [[nodiscard]] Result<ui::DebugGroupId> start(std::vector<run::RunConfiguration> members,
                                                  std::function<bool()> admitted, Prepare prepare);

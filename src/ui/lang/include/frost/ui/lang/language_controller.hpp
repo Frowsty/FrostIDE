@@ -308,11 +308,11 @@ private:
     void requestWorkspaceSymbols(const QString& query);
     void applyWorkspaceEdit(const ::frost::lang::WorkspaceEdit& edit, const QString& label);
     void executeServerCommand(std::string commandName, std::vector<::frost::lang::Json> arguments, const QString& label,
-                              std::shared_ptr<SemanticApply> semantic = {});
+                              const std::shared_ptr<SemanticApply>& semantic = {});
     void initServiceHooks();
     void onRenameAccepted(const QString& name);
-    void performAcceptedRename(std::string path, ::frost::lang::LspPosition position, std::string oldName,
-                               std::string newName, bool searchComments, bool preview);
+    void performAcceptedRename(const std::string& path, ::frost::lang::LspPosition position, const std::string& oldName,
+                               const std::string& newName, bool searchComments, bool preview);
     void findUsagesAt(std::string path, ::frost::lang::LspPosition position);
     void gotoDeclarationAtPosition(::frost::lang::LspPosition position);
     void requestStructure();
@@ -332,7 +332,7 @@ private:
     // the status bar when clangd does not offer it there. C++ only (capabilities().clangdTweaks).
     void runClangdTweak(std::string_view tweakId, const QString& label, const QString& none);
     // A server code action: its edit through the applier, then its command on the server.
-    void runCodeAction(::frost::lang::CodeActionItem action, std::shared_ptr<SemanticApply> semantic = {});
+    void runCodeAction(::frost::lang::CodeActionItem action, const std::shared_ptr<SemanticApply>& semantic = {});
     void showProviderTransformations(bool creation);
     // A command without a correct engine for the active document: `reason` names the owning epic.
     void unavailable(const QString& reason);

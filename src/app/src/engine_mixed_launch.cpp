@@ -115,7 +115,7 @@ struct EngineMixedLaunchCoordinator::Impl {
             timer->stop();
         emit self.changed();
     }
-    void abort(const std::shared_ptr<Job>& j, Error error, bool explicitStop = false) {
+    void abort(const std::shared_ptr<Job>& j, const Error& error, bool explicitStop = false) {
         if (j->finished)
             return;
         j->stop.request_stop();
@@ -298,7 +298,7 @@ struct EngineMixedLaunchCoordinator::Impl {
             abort(j, accepted.error());
     }
     Result<void> start(const std::shared_ptr<Job>& j, ui::DebugSessionRegistry& registry, ui::DebugGroupId group,
-                       std::stop_token stop, PreparedDebugLaunch::Started done) {
+                       const std::stop_token& stop, PreparedDebugLaunch::Started done) {
         if (j->finished || j->phase != "prepared" || j->stop.stop_requested() || stop.stop_requested() || !engine)
             return fail(ErrorCode::Cancelled, "Mixed engine preparation ended");
         if (group == 0 || !done || !j->plan)
@@ -382,7 +382,7 @@ struct EngineMixedLaunchCoordinator::Impl {
         auto done = std::move(j->prepared);
         PreparedDebugLaunch launch;
         launch.startPhased = [guard, j, abandoned](ui::DebugSessionRegistry& registry, ui::DebugGroupId group,
-                                                   std::stop_token stop,
+                                                   const std::stop_token& stop,
                                                    PreparedDebugLaunch::Started started) -> Result<void> {
             if (!guard)
                 return fail(ErrorCode::Cancelled, "Mixed engine coordinator ended");
@@ -481,7 +481,8 @@ EngineMixedLaunchCoordinator::~EngineMixedLaunchCoordinator() {
     const std::lock_guard lock(m_impl->relay->mutex);
     m_impl->relay->target = nullptr;
 }
-Result<void> EngineMixedLaunchCoordinator::prepare(const run::RunConfiguration& configuration, std::stop_token stop,
+Result<void> EngineMixedLaunchCoordinator::prepare(const run::RunConfiguration& configuration,
+                                                   const std::stop_token& stop,
                                                    MultiSessionDebugCoordinator::Prepared done) {
     if (!done || stop.stop_requested() || !m_impl->engine)
         return fail(ErrorCode::Cancelled, "Mixed engine preparation unavailable/cancelled");
@@ -495,7 +496,7 @@ Result<void> EngineMixedLaunchCoordinator::prepare(const run::RunConfiguration& 
     j->launch = std::move(*reservation);
     j->declared = configuration;
     j->prepared = std::move(done);
-    for (auto source : {stop, j->launch.projectStop})
+    for (const auto& source : {stop, j->launch.projectStop})
         j->cancellations.push_back(std::make_unique<Impl::Cancellation>(source, [weak = std::weak_ptr(j)] {
             if (auto job = weak.lock())
                 job->stop.request_stop();

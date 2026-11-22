@@ -42,7 +42,7 @@ public:
     // authentication before FER-9 prepare. Callback GUI, once; its Prepared.start is one-use.
     // Abandoning an unconsumed preparation cancels its DAP transport and stops only its owned host.
     // Refuses implicit rerun of an active configuration. Before-launch tasks remain RUN-11 owned.
-    [[nodiscard]] Result<void> prepare(const run::RunConfiguration& configuration, std::stop_token stop,
+    [[nodiscard]] Result<void> prepare(const run::RunConfiguration& configuration, const std::stop_token& stop,
                                        MultiSessionDebugCoordinator::Prepared completed);
     // Cancel pending preparations and owned Player debug runs; adopted Editor host remains Run-owned.
     void cancel();

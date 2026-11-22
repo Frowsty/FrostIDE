@@ -13,6 +13,8 @@
 #include <QMessageBox>
 #include <QPointer>
 #include <QProgressDialog>
+
+#include <ranges>
 namespace frost::app {
 namespace {
 sched::Task<void> prepareLuaAst(syntax::SyntaxTree tree, std::string operation, text::ByteRange range, std::string name,
@@ -20,7 +22,7 @@ sched::Task<void> prepareLuaAst(syntax::SyntaxTree tree, std::string operation, 
     if (operation == "inline")
         done(lang::planLuaInlineVariable(tree, range.begin, stop));
     else
-        done(lang::planLuaExtractFunction(tree, range, std::move(name), stop));
+        done(lang::planLuaExtractFunction(tree, range, name, stop));
     co_return;
 }
 QString displayLua(std::string_view text) {
@@ -50,7 +52,7 @@ void Workbench::registerLuaRefactoringActions() {
         (void)m_registry.add(std::move(action));
     }
 }
-void Workbench::showLuaRefactoring(std::string operation) {
+void Workbench::showLuaRefactoring(const std::string& operation) {
     auto* view = m_actionHost.active();
     if (!view || syntax::languageForFileName(view->path()) != syntax::LanguageId::Lua || m_projectRoot.empty())
         return;
@@ -128,9 +130,9 @@ void Workbench::showLuaRefactoring(std::string operation) {
                             return;
                         }
                         auto after = original.text();
-                        for (auto edit = proposed->edits.rbegin(); edit != proposed->edits.rend(); ++edit)
-                            after.replace(edit->range.begin.value(),
-                                          edit->range.end.value() - edit->range.begin.value(), edit->replacement);
+                        for (const auto& edit : std::views::reverse(proposed->edits))
+                            after.replace(edit.range.begin.value(), edit.range.end.value() - edit.range.begin.value(),
+                                          edit.replacement);
                         document::RefactoringPlan plan;
                         plan.label = proposed->title;
                         plan.buffers.push_back({path, original.text(), std::move(after)});

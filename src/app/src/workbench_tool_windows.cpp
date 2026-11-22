@@ -170,7 +170,7 @@ void Workbench::attachToolWindows() {
             },
             [this, propertyProject = projectPath.toStdString(), root = m_projectRoot,
              solution = m_solution->path()](std::string_view configuration, const std::vector<std::string>& keys,
-                                            std::stop_token stop) -> Result<ProjectPropertyMap> {
+                                            const std::stop_token& stop) -> Result<ProjectPropertyMap> {
                 auto evaluated = evaluatePropertyPage(propertyProject, root, solution, configuration, keys, stop);
                 if (!evaluated)
                     return std::unexpected(std::move(evaluated.error()));

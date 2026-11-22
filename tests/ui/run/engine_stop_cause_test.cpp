@@ -37,7 +37,7 @@ TEST(EngineRunStopCause, UserStopNotifiesExactRunBeforeTerminationWhileAutomatic
     };
     hooks.engineLaunchPlanFor =
         [](const auto&) -> std::function<Result<run::LaunchPlan>(run::LaunchPlan, std::stop_token)> {
-        return [](run::LaunchPlan p, std::stop_token) -> Result<run::LaunchPlan> { return p; };
+        return [](run::LaunchPlan p, const std::stop_token&) -> Result<run::LaunchPlan> { return p; };
     };
     std::vector<run::RunId> explicitStops;
     hooks.engineStopRequested = [&](run::RunId id) {

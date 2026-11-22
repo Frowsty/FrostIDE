@@ -271,7 +271,7 @@ Result<ProcessResult> IProcess::communicateUntil(std::string_view stdinData, std
 }
 Result<ProcessResult> runToCompletion(IProcessLauncher& launcher, const ProcessSpec& spec, std::string_view stdinData,
                                       IClock::Duration timeout, std::stop_token stop) {
-    return runToCompletionUntil(launcher, spec, stdinData, timeout, stop);
+    return runToCompletionUntil(launcher, spec, stdinData, timeout, std::move(stop));
 }
 Result<ProcessResult> runToCompletionUntil(IProcessLauncher& launcher, const ProcessSpec& spec,
                                            std::string_view stdinData, std::optional<IClock::Duration> timeout,

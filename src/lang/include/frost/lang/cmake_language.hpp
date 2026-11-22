@@ -24,7 +24,7 @@ struct CMakeLanguageInput {
 // Source analysis never configures a project or evaluates CMake code. Values explicitly distinguish
 // source declarations from the last configured cache. Unsupported dynamic declarations stay opaque.
 [[nodiscard]] Result<Json> queryCMakeLanguage(const CMakeLanguageInput& input, std::string_view method,
-                                              const Json& params, std::stop_token stop = {});
+                                              const Json& params, const std::stop_token& stop = {});
 struct CMakeRenameCapture;
 struct CMakeRenameState {
     mutable Mutex mutex;

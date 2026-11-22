@@ -185,10 +185,10 @@ TEST(ManagedCorpus, PinnedMoreLinqNet10ScratchEvaluatesBuildsAndExposesTheSameRo
     auto build = build::managedProjectBuildSpec(request);
     ASSERT_TRUE(build);
     build->environment = options.environment;
-    build->arguments.push_back("--no-restore");
+    build->arguments.emplace_back("--no-restore");
     // The pinned corpus's SDK 9 style policy promotes SDK 10 analyzer additions to errors.
     // This scratch-retargeted build checks compilation of the evaluated sources.
-    build->arguments.push_back("-p:EnforceCodeStyleInBuild=false");
+    build->arguments.emplace_back("-p:EnforceCodeStyleInBuild=false");
     auto built = io::runToCompletion(io::realProcessLauncher(), *build, {}, 5min);
     ASSERT_TRUE(built);
     EXPECT_EQ(built->exitCode, 0) << built->stdoutBytes << built->stderrBytes;

@@ -81,7 +81,7 @@ Result<void> StandaloneBuildBackend::build(build::BuildAction action, std::optio
         m_outcome.target.action = action;
     return result;
 }
-Result<void> StandaloneBuildBackend::buildTarget(project::MakeAction action, std::string target) {
+Result<void> StandaloneBuildBackend::buildTarget(project::MakeAction action, const std::string& target) {
     if (m_state != build::BuildState::Idle)
         return fail(ErrorCode::Busy, "a Make build is already active");
     auto steps = project::makeProjectArguments(m_model, action, target);

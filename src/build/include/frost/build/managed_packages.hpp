@@ -36,7 +36,8 @@ struct ManagedPackageInput {
 };
 // Blocking stable snapshots: 4096 files, 4 MiB each, 32 MiB total. Worker-only in the product UI.
 [[nodiscard]] Result<std::vector<ManagedPackageInput>>
-snapshotManagedPackageInputs(io::IFileSystem& fs, const std::vector<std::string>& paths, std::stop_token stop = {});
+snapshotManagedPackageInputs(io::IFileSystem& fs, const std::vector<std::string>& paths,
+                             const std::stop_token& stop = {});
 // Trust-gated real process with streamed output and whole-tree cancellation (BuildSession contract).
 [[nodiscard]] Result<std::unique_ptr<BuildSession>>
 startManagedPackageQuery(io::IProcessLauncher& launcher, const project::TrustStore& trust,

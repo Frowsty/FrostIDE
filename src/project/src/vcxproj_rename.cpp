@@ -269,7 +269,7 @@ Result<VcxprojRenamePlan> planVcxprojRename(const VcxprojRenameRequest& request)
 
 Result<VcxprojRenamePlan> planVcxprojRenameWithHost(io::IProcessLauncher& launcher, const ProjectEditLaunch& launch,
                                                     const ProjectEdit& edit, std::span<const VcxprojRenameInput> inputs,
-                                                    std::stop_token stop) {
+                                                    const std::stop_token& stop) {
     const auto* definition = findInput(inputs, edit.definition);
     const auto* filters = findInput(inputs, edit.definition + ".filters");
     if (!definition || !definition->contents || !filters)

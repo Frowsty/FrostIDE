@@ -20,6 +20,7 @@
 #include <array>
 #include <format>
 #include <optional>
+#include <ranges>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -65,8 +66,8 @@ Step chordOf(MatcherRig& rig, const std::vector<Code>& held, Code key) {
     }
     const auto tapped = rig.keyboard.tap(key);
     events.insert(events.end(), tapped.begin(), tapped.end());
-    for (auto it = held.rbegin(); it != held.rend(); ++it) {
-        const auto up = rig.keyboard.release(*it);
+    for (const Code c : std::views::reverse(held)) {
+        const auto up = rig.keyboard.release(c);
         events.insert(events.end(), up.begin(), up.end());
     }
     Step step = rig.feedAll(std::move(events));

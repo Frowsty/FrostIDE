@@ -20,6 +20,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <format>
+#include <ranges>
 #include <thread>
 
 namespace frost::diag {
@@ -345,9 +346,9 @@ void InMemoryCrashReporter::crashNow(FatalReason reason, std::string_view messag
 
 std::optional<std::string> InMemoryCrashReporter::annotation(AnnotationKey key) const {
     const std::scoped_lock lock(m_mutex);
-    for (auto it = m_annotations.rbegin(); it != m_annotations.rend(); ++it) {
-        if (it->first == key) {
-            return it->second;
+    for (const auto& [entryKey, value] : std::views::reverse(m_annotations)) {
+        if (entryKey == key) {
+            return value;
         }
     }
     return std::nullopt;

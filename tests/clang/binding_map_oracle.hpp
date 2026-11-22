@@ -87,7 +87,7 @@ inline std::optional<std::vector<std::string>> rawBindingUsrs(std::string_view c
         }
     } guard{**process};
     // Bound blocking stdout reads as well as final shutdown; no orphaned oracle on an assertion.
-    std::jthread deadline([&](std::stop_token stop) {
+    std::jthread deadline([&](const std::stop_token& stop) {
         std::mutex mutex;
         std::condition_variable_any wake;
         std::unique_lock lock(mutex);

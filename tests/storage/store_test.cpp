@@ -403,10 +403,12 @@ public:
             sqlite3_create_filename(path.c_str(), (path + "-journal").c_str(), (path + "-wal").c_str(), 0, nullptr);
         int outFlags = 0;
         const int rc = m_vfs->xOpen(m_vfs, m_names, file(), SQLITE_OPEN_MAIN_DB | SQLITE_OPEN_READWRITE, &outFlags);
-        m_open = file()->pMethods != nullptr;
-        m_locked = rc == SQLITE_OK && file()->pMethods->xLock(file(), SQLITE_LOCK_SHARED) == SQLITE_OK &&
-                   file()->pMethods->xLock(file(), SQLITE_LOCK_RESERVED) == SQLITE_OK &&
-                   file()->pMethods->xLock(file(), SQLITE_LOCK_EXCLUSIVE) == SQLITE_OK;
+        if (file()->pMethods != nullptr) {
+            m_open = true;
+            m_locked = rc == SQLITE_OK && file()->pMethods->xLock(file(), SQLITE_LOCK_SHARED) == SQLITE_OK &&
+                       file()->pMethods->xLock(file(), SQLITE_LOCK_RESERVED) == SQLITE_OK &&
+                       file()->pMethods->xLock(file(), SQLITE_LOCK_EXCLUSIVE) == SQLITE_OK;
+        }
     }
     ~OtherInstanceLock() {
         release();

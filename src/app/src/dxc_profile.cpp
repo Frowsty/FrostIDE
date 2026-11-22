@@ -11,7 +11,38 @@
 #include <condition_variable>
 #include <mutex>
 #include <thread>
+#include <vector>
 namespace frost::app {
+namespace {
+// Collapses lexical "." and ".." components in an already-normalized absolute POSIX path.
+std::string collapsePosixDotDot(std::string_view path) {
+    std::vector<std::string_view> parts;
+    std::size_t i = 1;
+    while (i < path.size()) {
+        const auto slash = path.find('/', i);
+        const auto end = slash == std::string_view::npos ? path.size() : slash;
+        const auto part = path.substr(i, end - i);
+        if (part == "..") {
+            if (!parts.empty())
+                parts.pop_back();
+        } else if (!part.empty() && part != ".") {
+            parts.push_back(part);
+        }
+        if (slash == std::string_view::npos)
+            break;
+        i = slash + 1;
+    }
+    if (parts.empty())
+        return "/";
+    std::string out;
+    out.reserve(path.size());
+    for (const std::string_view part : parts) {
+        out.push_back('/');
+        out.append(part);
+    }
+    return out;
+}
+} // namespace
 Result<io::ProcessSpec> dxcSpec(const DxcProfile& p) {
     const auto identifier = [](std::string_view s) {
         return !s.empty() && s.size() <= 128 &&
@@ -68,6 +99,8 @@ Result<std::vector<build::BuildDiagnostic>> parseDxcDiagnostics(std::string_view
                                   return io::normalizePath(joined);
                               });
             if (path && row.diagnostic.line > 0) {
+                if (io::kNativePathStyle == io::PathStyle::Posix && path->starts_with('/'))
+                    *path = collapsePosixDotDot(*path);
                 row.path = *path;
                 row.diagnostic.file = *path;
                 row.jumpable = true;
@@ -83,7 +116,7 @@ Result<std::vector<build::BuildDiagnostic>> parseDxcDiagnostics(std::string_view
     }
     return rows;
 }
-Result<DxcReport> runDxc(io::IProcessLauncher& launcher, const DxcProfile& profile, std::stop_token stop) {
+Result<DxcReport> runDxc(io::IProcessLauncher& launcher, const DxcProfile& profile, const std::stop_token& stop) {
     auto spec = dxcSpec(profile);
     if (!spec)
         return std::unexpected(spec.error());
@@ -96,7 +129,7 @@ Result<DxcReport> runDxc(io::IProcessLauncher& launcher, const DxcProfile& profi
     std::mutex mutex;
     std::condition_variable_any wake;
     std::atomic_bool timedOut = false;
-    std::jthread deadline([&](std::stop_token token) {
+    std::jthread deadline([&](const std::stop_token& token) {
         std::unique_lock lock(mutex);
         wake.wait_for(lock, token, std::chrono::seconds(30), [] { return false; });
         if (!token.stop_requested()) {

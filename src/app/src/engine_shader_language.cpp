@@ -36,7 +36,7 @@ struct Cancellation {
     std::shared_ptr<ReplyGate> Gate;
     using Callback = std::stop_callback<std::function<void()>>;
     std::optional<Callback> Caller, Owner;
-    Cancellation(std::stop_token caller, std::stop_token owner, std::shared_ptr<ReplyGate> gate)
+    Cancellation(const std::stop_token& caller, const std::stop_token& owner, std::shared_ptr<ReplyGate> gate)
         : Gate(std::move(gate)) {
         const std::function<void()> cancelled = [this] {
             Stop.request_stop();
@@ -88,8 +88,8 @@ void EngineIntegration::scheduleShaderDiagnostics(std::string path) {
             sched::Lane::Background, diagnose(impl.workbench.m_bridge.get(), path, impl.workStop.get_token())));
     });
 }
-void EngineIntegration::requestShaderLanguage(std::string method, lang::Json params, std::stop_token caller,
-                                              Reply completed) {
+void EngineIntegration::requestShaderLanguage(const std::string& method, lang::Json params,
+                                              const std::stop_token& caller, Reply completed) {
     auto gate = std::make_shared<ReplyGate>(std::move(completed));
     auto& impl = *m_impl;
     if (!impl.session || !impl.state || impl.state->state != "Edit" ||
@@ -169,7 +169,7 @@ void EngineIntegration::requestShaderLanguage(std::string method, lang::Json par
     const auto epoch = impl.epoch, sessionEpoch = impl.sessionEpoch, trust = impl.trustRevision,
                generation = impl.shaderPreviewGeneration;
     const auto root = impl.root, physicalRoot = impl.physicalRoot;
-    const auto query = *path;
+    const auto& query = *path;
     auto* fs = &impl.workbench.m_services.fs;
     QPointer<EngineIntegration> self(this);
     impl.background([self, fs, epoch, sessionEpoch, trust, generation, root, physicalRoot, query, program, method,

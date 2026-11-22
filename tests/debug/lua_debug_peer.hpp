@@ -87,14 +87,20 @@ inline LuaDebugAdmission admitLua() {
 class LuaDapPeer {
 public:
     using Handler = std::function<void(LuaDapPeer&)>;
-    explicit LuaDapPeer(Handler handler, LuaDebugIdentity identity = luaIdentity()) : m_identity(std::move(identity)) {
+    explicit LuaDapPeer(Handler handler, LuaDebugIdentity identity = luaIdentity())
+        : m_identity(std::move(identity))
+#ifndef _WIN32
+          ,
+          listener(socket(AF_INET, SOCK_STREAM, IPPROTO_TCP))
+#endif
+    {
 #ifdef _WIN32
         WSADATA data{};
         if (WSAStartup(MAKEWORD(2, 2), &data) != 0)
             return;
         m_winsock = true;
-#endif
         listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+#endif
         if (listener == kBadLuaSocket)
             return;
         sockaddr_in address{};
@@ -216,8 +222,8 @@ public:
                                               .set("body", std::move(body))
                                               .dump()));
     }
-    bool authenticate(std::function<void(rpc::Json&)> modifyChallenge = {},
-                      std::function<void(rpc::Json&)> modifyAck = {}) {
+    bool authenticate(const std::function<void(rpc::Json&)>& modifyChallenge = {},
+                      const std::function<void(rpc::Json&)>& modifyAck = {}) {
         auto challenge = receive();
         if (!challenge || challenge->integerAt("seq") != 1 || challenge->stringAt("command") != "frost/authChallenge")
             return false;

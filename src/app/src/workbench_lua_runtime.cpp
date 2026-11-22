@@ -13,7 +13,7 @@
 #include <QPointer>
 namespace frost::app {
 std::string Workbench::defaultLuaInterpreterPath() const {
-    const auto configured = m_services.settings.snapshot()->get(settings::key::toolsLuaInterpreterPath);
+    auto configured = m_services.settings.snapshot()->get(settings::key::toolsLuaInterpreterPath);
     if (!configured.empty())
         return configured;
 #ifdef _WIN32

@@ -175,7 +175,7 @@ TEST_F(DebugUiTest, SelectedGdbRoutesLaunchAndAttachThroughVersionAdmission) {
     options.fs = &fs;
     options.launcher = &launcher;
     options.nativeBackendSetting = [] { return "gdb"; };
-    options.gdbSetting = [executable] { return executable; };
+    options.gdbSetting = [&executable] { return std::string(executable); };
     DebugController selected(breakpoints, options);
     launcher.expect({.expectExecutable = executable, .stdoutBytes = "GNU gdb (GDB) 15.2\n"});
     auto launch = selected.startTarget(target());
@@ -467,7 +467,7 @@ TEST_F(DebugUiTest, SelectedDbgEngUsesConfiguredAdapterAndGuiNatvisDiscoveryForL
     options.fs = &fs;
     options.launcher = &launcher;
     options.nativeBackendSetting = [] { return "frost-dbgeng"; };
-    options.dbgEngPathSetting = [executable] { return executable; };
+    options.dbgEngPathSetting = [executable] { return std::string(executable); };
     int discoveries = 0;
     options.natvisFiles = [&](const debug::DebugTarget& resolved) -> Result<std::vector<std::string>> {
         EXPECT_EQ(resolved.program, target().program);

@@ -63,7 +63,7 @@ TEST(DotnetTests, CommandsOwnOneFrameworkAndRejectFilterInjection) {
     ASSERT_TRUE(dotnetTestSpec(request));
 }
 TEST(DotnetTests, MalformedOrDuplicateDefinitionsNeverCreateMethodSelectionAuthority) {
-    const auto report = [](std::string definitions) {
+    const auto report = [](const std::string& definitions) {
         return "<TestRun><Results><UnitTestResult testId=\"id\" executionId=\"exec\" testName=\"Display\" "
                "outcome=\"Passed\"/></Results><TestDefinitions>" +
                definitions + "</TestDefinitions><ResultSummary outcome=\"Completed\"/></TestRun>";

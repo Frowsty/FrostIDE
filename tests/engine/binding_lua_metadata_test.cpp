@@ -9,13 +9,13 @@
 namespace frost::engine {
 namespace {
 #ifdef _WIN32
-const std::string root = "C:/binding-metadata";
+constexpr const char* root = "C:/binding-metadata";
 #else
-const std::string root = "/binding-metadata";
+constexpr const char* root = "/binding-metadata";
 #endif
 std::string path(std::string_view name) { return io::joinPath(root, name).value(); }
 
-SchemaLuaEntry function(std::string name, std::string sameAs = {}) {
+SchemaLuaEntry function(const std::string& name, std::string sameAs = {}) {
     SchemaLuaEntry entry;
     entry.kind = "GlobalFunction";
     entry.name = name;

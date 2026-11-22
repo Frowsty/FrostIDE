@@ -54,7 +54,7 @@ Result<void> erase(storage::Database& database, std::string_view command) {
     }
     return {};
 }
-Result<bool> fresh(storage::Database& database, std::string_view command, std::stop_token stop,
+Result<bool> fresh(storage::Database& database, std::string_view command, const std::stop_token& stop,
                    std::vector<CppIndexUnit>& receipts, std::size_t& receiptBytes) {
     auto statement = database.prepare("SELECT receipt FROM units WHERE command=?1");
     if (!statement)
@@ -172,7 +172,8 @@ Result<void> CppIndexStore::clear() {
     });
 }
 Result<CppIndexQuery> CppIndexStore::symbols(std::string_view prefix, std::string_view hash,
-                                             std::string_view configuration, std::size_t limit, std::stop_token stop) {
+                                             std::string_view configuration, std::size_t limit,
+                                             const std::stop_token& stop) {
     return query(likePrefix(prefix), hash, configuration, limit, false, stop);
 }
 Result<std::size_t> CppIndexStore::storedCommands(std::string_view hash) {
@@ -188,12 +189,12 @@ Result<std::size_t> CppIndexStore::storedCommands(std::string_view hash) {
 }
 Result<CppIndexQuery> CppIndexStore::occurrences(std::string_view usr, std::string_view hash,
                                                  std::string_view configuration, std::size_t limit,
-                                                 std::stop_token stop) {
+                                                 const std::stop_token& stop) {
     return query(usr, hash, configuration, limit, true, stop);
 }
 Result<CppIndexQuery> CppIndexStore::query(std::string_view value, std::string_view hash,
                                            std::string_view configuration, std::size_t limit, bool usages,
-                                           std::stop_token stop) {
+                                           const std::stop_token& stop) {
     if (hash.size() != 64 || !limit || limit > 1000)
         return fail(ErrorCode::InvalidArgument, "Index query needs current CDB digest and a limit of1..1000");
     const auto sql =
@@ -256,7 +257,7 @@ Result<CppIndexQuery> CppIndexStore::query(std::string_view value, std::string_v
     return result;
 }
 Result<Json> CppIndexStore::relations(std::string_view usr, std::string_view hash, std::string_view configuration,
-                                      std::size_t limit, std::stop_token stop) {
+                                      std::size_t limit, const std::stop_token& stop) {
     if (hash.size() != 64 || !limit || limit > 1000)
         return fail(ErrorCode::InvalidArgument, "Invalid relation query");
     const auto handle = database.interruptHandle();

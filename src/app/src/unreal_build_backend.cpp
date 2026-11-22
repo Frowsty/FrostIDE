@@ -28,7 +28,7 @@
 
 namespace frost::app {
 void UnrealBuildBackend::attachMenu(ui::ShellWindow& window, std::function<Result<void>(std::string)> addEditor,
-                                    std::function<void(const std::string&)> openFile,
+                                    const std::function<void(const std::string&)>& openFile,
                                     std::function<void()> semanticProfileChanged,
                                     std::function<void()> inspectReflection) {
     m_semanticProfileChanged = std::move(semanticProfileChanged);
@@ -286,7 +286,7 @@ Result<void> UnrealBuildBackend::selectCompileDatabase(std::string file) {
         m_semanticProfileChanged();
     return {};
 }
-void UnrealBuildBackend::showProjectModel(QWidget* parent, std::function<void(const std::string&)> openFile) {
+void UnrealBuildBackend::showProjectModel(QWidget* parent, const std::function<void(const std::string&)>& openFile) {
     const QPointer<UnrealBuildBackend> self(this);
     const QPointer<QWidget> host(parent);
     const auto projectFile = m_model.projectFile;

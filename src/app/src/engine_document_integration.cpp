@@ -174,7 +174,7 @@ Result<void> EngineIntegration::refreshDocumentSchemas() {
 }
 Result<void> EngineIntegration::validateDocument() { return requestDocumentTool("document.validate"); }
 Result<void> EngineIntegration::refreshTableSchema() { return requestDocumentTool("document.table-schema"); }
-Result<void> EngineIntegration::requestDocumentTool(std::string method) {
+Result<void> EngineIntegration::requestDocumentTool(const std::string& method) {
     auto& impl = *m_impl;
     if (!impl.session || !impl.identity)
         return fail(ErrorCode::Busy, "Pair an editor before validating a document");

@@ -271,7 +271,7 @@ CrashArtifactObserver::capture(io::IFileSystem& fs, CrashArtifactSource source, 
     return observer;
 }
 
-Result<CrashArtifactScan> CrashArtifactObserver::poll(io::IFileSystem& fs, std::stop_token stop) {
+Result<CrashArtifactScan> CrashArtifactObserver::poll(io::IFileSystem& fs, const std::stop_token& stop) {
     CrashArtifactScan result;
     if (m_delivered)
         return result;

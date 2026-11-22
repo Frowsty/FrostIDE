@@ -12,6 +12,7 @@ class Expressions final : public clang::RecursiveASTVisitor<Expressions> {
 
 public:
     explicit Expressions(AnalyzerResults& o) : output(o), context(o.context) {}
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool TraverseDecl(clang::Decl* declaration) {
         if (declaration && declaration->getLocation().isValid() &&
             context.getSourceManager().isInSystemHeader(declaration->getLocation()))
@@ -21,6 +22,7 @@ public:
     void add(const char* id, const clang::Stmt& s, const char* message, std::optional<std::string> fix = {}) {
         output.add(id, s.getSourceRange(), message, std::move(fix));
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitBinaryOperator(clang::BinaryOperator* e) {
         const auto* lhs = clean(e->getLHS());
         const auto* rhs = clean(e->getRHS());
@@ -87,6 +89,7 @@ public:
             add("frost-assignment-condition", *binary,
                 "Built-in assignment is used directly as a condition; confirm this is intentional.");
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitIfStmt(clang::IfStmt* e) {
         condition(e->getCond());
         if (!e->isConstexpr() && e->getCond() && !e->getCond()->isValueDependent() &&
@@ -114,6 +117,7 @@ public:
                 "Both branches return opposite boolean literals; the condition can express this result.");
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitWhileStmt(clang::WhileStmt* e) {
         condition(e->getCond());
         if (llvm::isa<clang::NullStmt>(e->getBody()))
@@ -121,12 +125,14 @@ public:
                 "While loop has an empty statement body; confirm a deliberate spin loop.");
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitForStmt(clang::ForStmt* e) {
         if (llvm::isa<clang::NullStmt>(e->getBody()))
             add("frost-empty-loop", *e->getBody(),
                 "For loop has an empty statement body; confirm this is intentional.");
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitCXXStaticCastExpr(clang::CXXStaticCastExpr* e) {
         const auto* operand = clean(e->getSubExpr());
         if (operand->isPRValue() && operand->getType()->isScalarType() &&
@@ -145,6 +151,7 @@ public:
         }
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitImplicitCastExpr(clang::ImplicitCastExpr* e) {
         if (e->getCastKind() != clang::CK_IntegralCast || !e->getType()->isIntegerType() ||
             e->getType()->isBooleanType())
@@ -161,6 +168,7 @@ public:
                 "Constant integral value lies outside the destination type range.");
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitUnaryOperator(clang::UnaryOperator* e) {
         if (e->getOpcode() == clang::UO_Minus && e->getType()->isSignedIntegerType())
             if (auto value = integer(e->getSubExpr(), context); value && value->isMinSignedValue())

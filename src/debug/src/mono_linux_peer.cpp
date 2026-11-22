@@ -133,6 +133,7 @@ Result<LinuxProcessIdentity> readIdentity(const LinuxPeer::Impl& impl) {
 }
 } // namespace
 #endif
+// NOLINTNEXTLINE(performance-unnecessary-value-param): moved into Impl on Linux builds.
 Result<std::shared_ptr<LinuxPeer>> LinuxPeer::select(std::uint32_t pid, std::function<bool()> current) {
     if (!pid || pid > static_cast<std::uint32_t>(std::numeric_limits<int>::max()) || !current)
         return fail(ErrorCode::InvalidArgument, "select a live Mono process");
@@ -156,7 +157,7 @@ Result<std::shared_ptr<LinuxPeer>> LinuxPeer::select(std::uint32_t pid, std::fun
 #endif
 }
 Result<void> LinuxPeer::verify(std::uint16_t localPort, std::uint16_t remotePort, MonoDeadline deadline,
-                               std::stop_token stop) const {
+                               const std::stop_token& stop) const {
 #ifndef __linux__
     (void)localPort;
     (void)remotePort;

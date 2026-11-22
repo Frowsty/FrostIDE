@@ -44,7 +44,7 @@ auto deliver(DebugController& controller, QWidget* owner, Done done, bool select
                     return;
                 if (selectionBound && (!controller.paused() || controller.session()->inspectionGeneration() != epoch))
                     return;
-                const auto current = controller.selectedFrame();
+                const auto& current = controller.selectedFrame();
                 if (selectionBound && controller.selectedThread() != thread)
                     return;
                 if (selectionBound && (bool(current) != bool(frame) || (frame && current->id != frame->id)))

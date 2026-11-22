@@ -215,10 +215,10 @@ struct EngineIntegration::Impl {
     [[nodiscard]] bool currentIdentity(const engine::EngineIdentity& observed) const;
     [[nodiscard]] Result<void> refresh();
     [[nodiscard]] Result<void> connectInstance(const EngineInstanceRecord& instance);
-    [[nodiscard]] Result<std::uint64_t> send(std::string method, lang::Json params,
+    [[nodiscard]] Result<std::uint64_t> send(const std::string& method, lang::Json params,
                                              std::function<void(Result<lang::Json>)> completed = {},
                                              bool workerCompletion = false, std::stop_token stop = {});
-    [[nodiscard]] Result<void> findAssetUsages(std::string relative, engine::EngineHandle handle);
+    [[nodiscard]] Result<void> findAssetUsages(const std::string& relative, engine::EngineHandle handle);
     void clearAssetUsages();
     void publishDocumentProblems();
     void publishDocumentAssets();

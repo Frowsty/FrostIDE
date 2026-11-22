@@ -23,9 +23,11 @@ struct SceneMergeWork {
     std::string workTree, gitDir, absolute, relative;
 };
 // Worker-only: exact stage OIDs, UTF8 lossless images, source receipts, real engine validation.
-[[nodiscard]] Result<SceneMergeSnapshot> prepareSceneMerge(const SceneMergeWork&, std::stop_token);
-[[nodiscard]] Result<void> validateSceneMergeSources(const SceneMergeWork&, const SceneMergeSnapshot&, std::stop_token);
-[[nodiscard]] Result<SceneMergeSnapshot> refreshSceneMerge(const SceneMergeWork&, SceneMergeSnapshot, std::stop_token);
+[[nodiscard]] Result<SceneMergeSnapshot> prepareSceneMerge(const SceneMergeWork&, const std::stop_token&);
+[[nodiscard]] Result<void> validateSceneMergeSources(const SceneMergeWork&, const SceneMergeSnapshot&,
+                                                     const std::stop_token&);
+[[nodiscard]] Result<SceneMergeSnapshot> refreshSceneMerge(const SceneMergeWork&, SceneMergeSnapshot,
+                                                           const std::stop_token&);
 // Parentless owned modal waits for its no-write worker even when owner is destroyed/cancelled.
 [[nodiscard]] Result<SceneMergeSnapshot>
 sceneMergeInBackground(QWidget*, std::function<Result<SceneMergeSnapshot>(std::stop_token)>);

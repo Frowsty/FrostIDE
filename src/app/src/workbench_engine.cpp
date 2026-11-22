@@ -28,8 +28,8 @@ Result<void> Workbench::refreshEnginePerformance() {
     return m_engine ? m_engine->refreshPerformance()
                     : Result<void>(fail(ErrorCode::Unsupported, "FrostEngine integration is unavailable"));
 }
-Result<void> Workbench::showAssetInFrostEditor(std::string path, bool openAsset) {
-    return m_engine ? m_engine->showInFrostEditor(std::move(path), openAsset)
+Result<void> Workbench::showAssetInFrostEditor(const std::string& path, bool openAsset) {
+    return m_engine ? m_engine->showInFrostEditor(path, openAsset)
                     : Result<void>(fail(ErrorCode::Unsupported, "FrostEngine integration is unavailable"));
 }
 Result<void> Workbench::refreshEngineInstances() {
@@ -44,10 +44,10 @@ void Workbench::disconnectEngineSession() {
     if (m_engine)
         m_engine->disconnect();
 }
-Result<std::uint64_t> Workbench::sendEngineCommand(std::string method, lang::Json params) {
+Result<std::uint64_t> Workbench::sendEngineCommand(const std::string& method, lang::Json params) {
     if (!m_engine)
         return fail(ErrorCode::Unsupported, "FrostEngine integration is unavailable");
-    return m_engine->command(std::move(method), std::move(params));
+    return m_engine->command(method, std::move(params));
 }
 Result<build::RunId> Workbench::startEngineEditor() {
     return m_engine ? m_engine->startEditor()

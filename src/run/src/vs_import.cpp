@@ -16,7 +16,7 @@ Result<std::string> expand(std::string value, std::string_view root) {
         value.replace(at, macro.size(), root);
         at += root.size();
     }
-    if (value.find("${") != std::string::npos || value.find("%") != std::string::npos)
+    if (value.find("${") != std::string::npos || value.find('%') != std::string::npos)
         return fail(ErrorCode::Unsupported, "Only ${workspaceRoot} substitution is supported");
     return value;
 }

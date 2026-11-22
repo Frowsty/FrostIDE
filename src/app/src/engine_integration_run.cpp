@@ -52,8 +52,7 @@ std::vector<run::RunConfiguration> EngineIntegration::Impl::generated() const {
     std::vector<run::RunConfiguration> out;
     if (!available)
         return out;
-    for (std::size_t index = 0; index < installations.size(); ++index) {
-        const auto& installation = installations[index];
+    for (const auto& installation : installations) {
         const auto digest = QCryptographicHash::hash(QByteArray::fromStdString(lang::documentKey(installation.program)),
                                                      QCryptographicHash::Sha256)
                                 .toHex()
@@ -258,7 +257,7 @@ EngineIntegration::launchPlanFor(const run::RunConfiguration& configuration) con
         admission->project != configuration.engineProjectPath)
         return {};
     const auto scan = m_impl->contentScan;
-    return [admission, scan](run::LaunchPlan plan, std::stop_token stop) -> Result<run::LaunchPlan> {
+    return [admission, scan](run::LaunchPlan plan, const std::stop_token& stop) -> Result<run::LaunchPlan> {
         if (scan && scan->projectKey == admission->projectKey) {
             std::unique_lock lock(scan->mutex);
             scan->completed.wait(lock, stop, [&] { return scan->finished; });
@@ -353,7 +352,7 @@ EngineIntegration::sessionToolPlanFor(const run::RunConfiguration& config) const
     auto admission = sessionToolAdmissionFor(config);
     const auto found = m_impl->toolResolutions.find(config.id);
     if (found == m_impl->toolResolutions.end())
-        return [admission = std::move(admission)](run::LaunchPlan) -> Result<run::LaunchPlan> {
+        return [admission = std::move(admission)](const run::LaunchPlan&) -> Result<run::LaunchPlan> {
             auto allowed = admission();
             return fail(ErrorCode::PermissionDenied,
                         allowed ? "No generated native project reservation" : allowed.error().message());

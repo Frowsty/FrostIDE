@@ -35,16 +35,16 @@ QString field(const rpc::Json& object, const char* key) {
 }
 } // namespace
 DebugSymbolsWindow::DebugSymbolsWindow(DebugController& controller, QWidget* parent)
-    : QWidget(parent), m_controller(controller) {
+    : QWidget(parent), m_controller(controller), m_modules(new QTreeWidget(this)), m_paths(new QPlainTextEdit(this)),
+      m_visualizers(new QPlainTextEdit(this)), m_sourceMap(new QPlainTextEdit(this)), m_natvisStatus(new QLabel(this)),
+      m_watcher(new QFileSystemWatcher(this)) {
     auto* layout = new QVBoxLayout(this);
     m_status = new QLabel(tr("Modules and visualizers require adapter support and a stopped target."), this);
     m_status->setObjectName("debugSymbolsStatus");
     m_status->setWordWrap(true);
     layout->addWidget(m_status);
-    m_natvisStatus = new QLabel(this);
     m_natvisStatus->setWordWrap(true);
     layout->addWidget(m_natvisStatus);
-    m_modules = new QTreeWidget(this);
     m_modules->setObjectName("debugModules");
     m_modules->setHeaderLabels({tr("Module"), tr("Path"), tr("Address"), tr("Symbols"), tr("Symbol file")});
     layout->addWidget(m_modules);
@@ -55,7 +55,6 @@ DebugSymbolsWindow::DebugSymbolsWindow(DebugController& controller, QWidget* par
     m_reload->setObjectName("debugReloadSymbols");
     layout->addWidget(m_reload);
     layout->addWidget(new QLabel(tr("Symbol directories or srv*absolute-cache*https://server, one per line"), this));
-    m_paths = new QPlainTextEdit(this);
     m_paths->setObjectName("debugSymbolPaths");
     m_paths->setMaximumHeight(80);
     layout->addWidget(m_paths);
@@ -63,7 +62,6 @@ DebugSymbolsWindow::DebugSymbolsWindow(DebugController& controller, QWidget* par
     layout->addWidget(m_allowServer);
     m_apply = new QPushButton(tr("Apply symbol paths"), this);
     layout->addWidget(m_apply);
-    m_sourceMap = new QPlainTextEdit(this);
     m_sourceMap->setObjectName("debugSourceMap");
     m_sourceMap->setPlaceholderText(tr("Absolute build root => absolute local root, one mapping per line"));
     m_sourceMap->setMaximumHeight(60);
@@ -71,14 +69,12 @@ DebugSymbolsWindow::DebugSymbolsWindow(DebugController& controller, QWidget* par
     m_applySourceMap = new QPushButton(tr("Apply source mappings"), this);
     layout->addWidget(m_applySourceMap);
     layout->addWidget(new QLabel(tr("Absolute Natvis files, one per line (saved changes reload when stopped)"), this));
-    m_visualizers = new QPlainTextEdit(this);
     m_visualizers->setObjectName("debugNatvisFiles");
     m_visualizers->setMaximumHeight(80);
     layout->addWidget(m_visualizers);
     m_loadVisualizers = new QPushButton(tr("Load / reload visualizers"), this);
     m_loadVisualizers->setObjectName("debugReloadNatvis");
     layout->addWidget(m_loadVisualizers);
-    m_watcher = new QFileSystemWatcher(this);
     connect(&controller, &DebugController::visualizersChanged, this, &DebugSymbolsWindow::setVisualizers);
     setVisualizers(controller.visualizers());
     auto* saved = new QTimer(this);
@@ -127,7 +123,7 @@ DebugSymbolsWindow::DebugSymbolsWindow(DebugController& controller, QWidget* par
 void DebugSymbolsWindow::resultMessage(bool success, const QString& text) {
     m_status->setText((success ? tr("Adapter: ") : tr("Unavailable: ")) + text);
 }
-void DebugSymbolsWindow::setVisualizers(QStringList files) {
+void DebugSymbolsWindow::setVisualizers(const QStringList& files) {
     m_visualizers->setPlainText(files.join('\n'));
     if (!m_watcher->files().isEmpty())
         m_watcher->removePaths(m_watcher->files());

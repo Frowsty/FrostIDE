@@ -36,7 +36,7 @@ public:
     void trustChanged();
     // GUI actions use only current authenticated commands and engine-listed asset identities.
     [[nodiscard]] Result<void> refreshPerformance();
-    [[nodiscard]] Result<void> showInFrostEditor(std::string path, bool openAsset = false);
+    [[nodiscard]] Result<void> showInFrostEditor(const std::string& path, bool openAsset = false);
     void invalidatePerformanceLenses();
     [[nodiscard]] bool isListedAsset(std::string_view absolutePath) const;
     // GUI native adapter observer; publishes typed actual event evidence to the exact R6 lease.
@@ -48,13 +48,13 @@ public:
     [[nodiscard]] Result<void> refreshInstances();
     [[nodiscard]] Result<void> pair(std::string_view instanceId);
     void disconnect();
-    [[nodiscard]] Result<std::uint64_t> command(std::string method, lang::Json params);
+    [[nodiscard]] Result<std::uint64_t> command(const std::string& method, lang::Json params);
     [[nodiscard]] Result<build::RunId> startEditor();
     [[nodiscard]] Result<void> validateScript();
     [[nodiscard]] Result<void> refreshDocumentSchemas();
     [[nodiscard]] Result<void> validateDocument();
     [[nodiscard]] Result<void> refreshTableSchema();
-    [[nodiscard]] Result<void> requestDocumentTool(std::string method);
+    [[nodiscard]] Result<void> requestDocumentTool(const std::string& method);
     [[nodiscard]] Result<void> validateContent();
     void documentEdited(std::string_view path, std::uint64_t version);
     void clearDocumentTools();
@@ -66,20 +66,20 @@ public:
     void invalidateShaderPreview();
     // Ordinary GUI-dispatched language requests; stop reaches the actual session and all results retain source
     // identity.
-    void requestShaderLanguage(std::string method, lang::Json params, std::stop_token stop,
+    void requestShaderLanguage(const std::string& method, lang::Json params, const std::stop_token& stop,
                                std::function<void(Result<lang::Json>)> completed);
     void scheduleShaderDiagnostics(std::string path);
     [[nodiscard]] std::string shaderLanguageIdentity() const;
     // Actual authenticated content command; callback runs on GUI only for the retained session.
-    [[nodiscard]] Result<std::uint64_t> contentCommand(std::string method, lang::Json params,
+    [[nodiscard]] Result<std::uint64_t> contentCommand(const std::string& method, lang::Json params,
                                                        std::function<void(Result<lang::Json>)> completed);
     [[nodiscard]] Result<void> findAssetUsagesForDocument(std::string_view absolutePath, bool reveal = true);
     void invalidateAssetUsages();
     [[nodiscard]] Result<void> recoverAssetMoveAfterNativeSettlement();
     // GUI-only authenticated preparation; bounded nonpumping reply waits and modal preview. No disk effects.
     // Exact lease and reversible receipt remain tied to the original session and project trust.
-    [[nodiscard]] Result<void> prepareAssetMove(document::RefactoringPlan& plan, std::string oldPath,
-                                                std::string newPath);
+    [[nodiscard]] Result<void> prepareAssetMove(document::RefactoringPlan& plan, const std::string& oldPath,
+                                                const std::string& newPath);
     [[nodiscard]] Result<void> showSerializedProperties();
     [[nodiscard]] Result<void> cancelRequest();
     [[nodiscard]] lang::Json snapshot() const;
@@ -128,12 +128,13 @@ public:
     void nativeHostEnded(EngineNativeHostToken token, const debug::DebugOutcome& outcome);
 
     using LuaConnected = std::function<void(Result<debug::LuaDebugConnection>)>;
-    [[nodiscard]] Result<void> connectLuaDebug(const EngineLuaDebugOwner& owner, debug::LuaDebugAdmission admission,
-                                               std::stop_token stop, debug::LuaDebugTransportCallbacks callbacks,
-                                               LuaConnected completed);
+    [[nodiscard]] Result<void> connectLuaDebug(const EngineLuaDebugOwner& owner,
+                                               const debug::LuaDebugAdmission& admission, const std::stop_token& stop,
+                                               debug::LuaDebugTransportCallbacks callbacks, LuaConnected completed);
     // GUI-only dispatch, typed callback on GUI; underlying Session policy and trust run at send.
     [[nodiscard]] Result<void> commandForLua(const EngineLuaDebugOwner& owner, std::string method, lang::Json params,
-                                             engine::EngineSession::ObservedReply completed, std::stop_token stop);
+                                             engine::EngineSession::ObservedReply completed,
+                                             const std::stop_token& stop);
     [[nodiscard]] Result<engine::EngineState> currentLuaDebugState(const EngineLuaDebugOwner& owner) const;
 signals:
     // Actual current-identity push publication only; command replies do not synthesize state.

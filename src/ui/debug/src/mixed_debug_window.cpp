@@ -26,11 +26,10 @@ void showStack(QTreeWidget& tree, const std::optional<MixedDebugStack>& stack) {
     }
 }
 } // namespace
-MixedDebugWindow::MixedDebugWindow(QWidget* parent) : QWidget(parent) {
+MixedDebugWindow::MixedDebugWindow(QWidget* parent) : QWidget(parent), m_status(new QLabel(this)) {
     setObjectName(QStringLiteral("mixedDebugWindow"));
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
-    m_status = new QLabel(this);
     m_status->setObjectName(QStringLiteral("mixedDebugStatus"));
     m_status->setWordWrap(true);
     layout->addWidget(m_status);

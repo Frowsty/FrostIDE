@@ -68,7 +68,7 @@ TEST(EngineLocator, BuiltEditorUsesActualGuiAndConsoleExecutables) {
     dir.write("build/windows-debug/bin/FrostEditor.com", "not executed by filesystem discovery");
 #else
     const std::string gui = dir.join("build/linux-debug/bin/FrostEditor");
-    const std::string cli = gui;
+    const std::string& cli = gui;
     dir.write("build/linux-debug/bin/FrostEditor", "not executed by filesystem discovery");
 #endif
     auto found = frost::app::locateEngineInstallations(frost::io::realFileSystem(), dir.join("project"));

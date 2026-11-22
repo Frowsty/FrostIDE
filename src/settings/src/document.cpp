@@ -11,6 +11,7 @@
 
 #include <format>
 #include <limits>
+#include <ranges>
 #include <utility>
 
 namespace frost::settings {
@@ -54,9 +55,9 @@ SettingsDocument SettingsDocument::create(std::uint32_t schemaVersion) {
 }
 
 const SettingsDocument::Member* SettingsDocument::find(std::string_view key) const noexcept {
-    for (auto it = m_members.rbegin(); it != m_members.rend(); ++it) {
-        if (it->key == key) {
-            return &*it;
+    for (const Member& member : std::views::reverse(m_members)) {
+        if (member.key == key) {
+            return &member;
         }
     }
     return nullptr;

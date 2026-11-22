@@ -46,6 +46,7 @@ bool identityMatches(const WindowsPeer::Impl& impl) {
 } // namespace
 #endif
 WindowsProcessIdentity WindowsPeer::identity() const { return {m_impl->pid, m_impl->creation, m_impl->image}; }
+// NOLINTNEXTLINE(performance-unnecessary-value-param): moved into Impl on Windows builds.
 Result<std::shared_ptr<WindowsPeer>> WindowsPeer::select(std::uint32_t pid, std::function<bool()> current) {
     if (!pid || !current)
         return fail(ErrorCode::InvalidArgument, "select a live Mono process");
@@ -75,8 +76,10 @@ Result<std::shared_ptr<WindowsPeer>> WindowsPeer::select(std::uint32_t pid, std:
     return std::shared_ptr<WindowsPeer>(new WindowsPeer(std::move(impl)));
 #endif
 }
-Result<std::shared_ptr<WindowsPeer>> WindowsPeer::open(std::uint32_t pid, std::uint64_t creationTime,
-                                                       std::function<bool()> current) {
+Result<std::shared_ptr<WindowsPeer>>
+WindowsPeer::open(std::uint32_t pid, std::uint64_t creationTime,
+                  // NOLINTNEXTLINE(performance-unnecessary-value-param): moved into Impl on Windows builds.
+                  std::function<bool()> current) {
     if (!pid || !creationTime || !current)
         return fail(ErrorCode::InvalidArgument, "Mono peer identity required");
 #ifndef _WIN32

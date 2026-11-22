@@ -175,7 +175,7 @@ Result<project::HostEvaluation> Workbench::evaluatePropertyPage(const std::strin
                                                                 const std::string& solution,
                                                                 std::string_view configuration,
                                                                 const std::vector<std::string>& keys,
-                                                                std::stop_token stop) {
+                                                                const std::stop_token& stop) {
     const auto bar = configuration.find('|');
     if (bar == std::string_view::npos)
         return fail(ErrorCode::InvalidArgument, "Choose one project configuration.");

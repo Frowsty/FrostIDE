@@ -35,8 +35,8 @@ struct StructuralResult {
  * to 4 MiB input, 16 KiB pattern/template, 32 captures, 2000 matches, 8 MiB captured/output bytes
  * and a two-second parse/query deadline each; cancellation/limits return errors, never a subset.
  */
-[[nodiscard]] Result<StructuralResult> structuralSearch(LanguageId language, text::Snapshot source,
+[[nodiscard]] Result<StructuralResult> structuralSearch(LanguageId language, const text::Snapshot& source,
                                                         std::string_view pattern,
                                                         std::optional<std::string_view> replacement = {},
-                                                        std::stop_token stop = {});
+                                                        const std::stop_token& stop = {});
 } // namespace frost::syntax

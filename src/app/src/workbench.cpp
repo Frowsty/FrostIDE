@@ -261,11 +261,11 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
     });
     m_language->setCppRenameCheck([this](std::string path, lang::LspPosition position, std::string name,
                                          lang::WorkspaceEdit required, lang::WorkspaceEdit offered,
-                                         std::stop_token cancel, std::function<void(Result<void>)> done) {
+                                         const std::stop_token& cancel, std::function<void(Result<void>)> done) {
         checkCppRename(std::move(path), position, std::move(name), std::move(required), std::move(offered), cancel,
                        std::move(done));
     });
-    m_language->setCppAstRefactoring([this](std::string operation) { showCppRefactoring(std::move(operation)); });
+    m_language->setCppAstRefactoring([this](const std::string& operation) { showCppRefactoring(operation); });
     m_language->setCppSemanticEditFactory([this] { return beginCppProviderRefactoring(); });
     m_language->setCppPublishedScopeFix([this] { showCppPublishedFixes(); });
     if (auto registered = m_language->registerActions(m_registry); !registered) {

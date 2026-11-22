@@ -41,6 +41,7 @@
 
 #include <algorithm>
 #include <format>
+#include <ranges>
 #include <utility>
 
 namespace frost::app {
@@ -523,8 +524,8 @@ void Workbench::renameSourceInCMakeLists(const std::string& oldPath, const std::
         return;
     }
     std::string updated = *content;
-    for (auto it = edits.rbegin(); it != edits.rend(); ++it) {
-        updated.replace(it->begin, it->end - it->begin, it->text);
+    for (const auto& edit : std::views::reverse(edits)) {
+        updated.replace(edit.begin, edit.end - edit.begin, edit.text);
     }
     if (!project::scanCMakeSyntax(updated)) {
         return;
@@ -592,8 +593,8 @@ void Workbench::removeSourceFromCMakeLists(const std::string& deletedPath, bool 
         return;
     }
     std::string updated = *content;
-    for (auto it = spans.rbegin(); it != spans.rend(); ++it) {
-        updated.erase(it->first, it->second - it->first);
+    for (const auto& [begin, end] : std::views::reverse(spans)) {
+        updated.erase(begin, end - begin);
     }
     if (!project::scanCMakeSyntax(updated)) {
         return;

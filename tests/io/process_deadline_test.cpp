@@ -58,7 +58,7 @@ TEST(ProcessDeadline, CancellationOnlyRunStopsActualOwnedChildAndDiscardsOutput)
     std::stop_source stop;
     std::optional<Result<ProcessResult>> result;
     std::atomic<bool> done = false;
-    std::jthread worker([&](std::stop_token lifetime) {
+    std::jthread worker([&](const std::stop_token& lifetime) {
         std::stop_callback cancelOnExit(lifetime, [&] { stop.request_stop(); });
         result =
             runToCompletionUntil(launcher, test::childSpec({"sleep", "60000"}), {}, std::nullopt, stop.get_token());

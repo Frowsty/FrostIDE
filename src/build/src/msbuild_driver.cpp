@@ -235,8 +235,10 @@ std::vector<std::string> msbuildInfrastructureImages() {
     return {"MSBuild.exe", "MSBuildTaskHost.exe", "mspdbsrv.exe", "VBCSCompiler.exe"};
 }
 
-Result<std::unique_ptr<BuildSession>> startMsBuild(io::IProcessLauncher& launcher, const MsBuildRequest& request,
-                                                   BuildCallbacks callbacks, IClock& clock) {
+Result<std::unique_ptr<BuildSession>>
+startMsBuild(io::IProcessLauncher& launcher, const MsBuildRequest& request,
+             // NOLINTNEXTLINE(performance-unnecessary-value-param): moved into BuildSession on Windows builds.
+             BuildCallbacks callbacks, IClock& clock) {
     if (!request.trusted) {
         return fail(ErrorCode::Untrusted, "the build was not started: the solution's folder is not trusted");
     }

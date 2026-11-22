@@ -10,6 +10,7 @@
 
 #include <gtest/gtest.h>
 
+#include <ranges>
 #include <string>
 #include <vector>
 
@@ -77,8 +78,8 @@ TEST(LineChanges, RollbackRestoresEachChange) {
 
     // Rolling every change back, last first, gives the base.
     std::string text = current;
-    for (auto it = changes->rbegin(); it != changes->rend(); ++it) {
-        text = applied(text, rollbackEdit(base, buffer, *it));
+    for (const auto& change : std::views::reverse(*changes)) {
+        text = applied(text, rollbackEdit(base, buffer, change));
     }
     EXPECT_EQ(text, baseText());
 }

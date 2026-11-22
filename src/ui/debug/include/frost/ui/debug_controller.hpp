@@ -152,7 +152,7 @@ public:
     // admission decisions, but every trust root is rechecked here before the factory starts.
     // readOnly disables execution/mutation and disconnects without terminating a host.
     [[nodiscard]] Result<void> startAdapterTarget(const debug::DebugTarget& target, debug::AdapterFactory factory,
-                                                  rpc::Json arguments, std::string adapterId,
+                                                  rpc::Json arguments, const std::string& adapterId,
                                                   debug::DebugTargetMode mode = debug::DebugTargetMode::Launch,
                                                   bool readOnly = false,
                                                   std::function<Result<void>()> launchAdmission = {},

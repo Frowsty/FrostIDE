@@ -7,42 +7,42 @@
 #include <gtest/gtest.h>
 using namespace frost::lang;
 namespace {
-const std::string guid = "0123456789abcdef0123456789abcdef";
+std::string guid() { return "0123456789abcdef0123456789abcdef"; }
 TEST(UnityAssets, OriginalGuidNavigationAndByteOffsets) {
     const std::vector<UnityAssetSnapshot> files{
-        {"Assets/é.cs.meta", "fileFormatVersion: 2\r\nguid: " + guid + "\r\n"},
+        {"Assets/é.cs.meta", "fileFormatVersion: 2\r\nguid: " + guid() + "\r\n"},
         {"Assets/Scene.unity", "%YAML 1.1\r\n--- !u!114 &1\r\nMonoBehaviour:\r\n  m_Script: {fileID: 11500000, guid: " +
-                                   guid + ", type: 3}\r\n"}};
+                                   guid() + ", type: 3}\r\n"}};
     UnityAssetIndex index;
     index.reset(files);
-    ASSERT_TRUE(index.resolve(guid));
-    EXPECT_EQ(index.resolve(guid)->path, "Assets/é.cs");
-    const auto usages = index.usages(guid);
+    ASSERT_TRUE(index.resolve(guid()));
+    EXPECT_EQ(index.resolve(guid())->path, "Assets/é.cs");
+    const auto usages = index.usages(guid());
     ASSERT_EQ(usages.size(), 1);
-    EXPECT_EQ(files[1].contents.substr(usages[0].offset, 32), guid);
+    EXPECT_EQ(files[1].contents.substr(usages[0].offset, 32), guid());
     EXPECT_EQ(usages[0].fileId, "11500000");
 }
 TEST(UnityAssets, DuplicateGuidDoesNotGuessTargetAndResetDropsOldRows) {
-    std::vector<UnityAssetSnapshot> files{{"Assets/A.meta", "guid: " + guid}, {"Assets/B.meta", "guid: " + guid}};
+    std::vector<UnityAssetSnapshot> files{{"Assets/A.meta", "guid: " + guid()}, {"Assets/B.meta", "guid: " + guid()}};
     UnityAssetIndex index;
     index.reset(files);
-    EXPECT_FALSE(index.resolve(guid));
+    EXPECT_FALSE(index.resolve(guid()));
     index.reset({});
-    EXPECT_FALSE(index.resolve(guid));
-    EXPECT_TRUE(index.usages(guid).empty());
+    EXPECT_FALSE(index.resolve(guid()));
+    EXPECT_TRUE(index.usages(guid()).empty());
 }
 TEST(UnityAssets, TextAndQuotedScalarsAreNotSemanticUsages) {
-    const std::string ref = "{fileID: 1, guid: " + guid + ", type: 3}";
+    const std::string ref = "{fileID: 1, guid: " + guid() + ", type: 3}";
     const std::vector<UnityAssetSnapshot> files{
         {"Assets/S.prefab", "%YAML 1.1\n# " + ref + "\n  text: '" + ref + "'\n  text: |\n    fake: " + ref + "\n"},
         {"Assets/Readme.txt", ref}};
     UnityAssetIndex index;
     index.reset(files);
-    EXPECT_TRUE(index.usages(guid).empty());
+    EXPECT_TRUE(index.usages(guid()).empty());
 }
 TEST(UnityAssets, MovePreservesOriginalMetaAndRefusesIncompleteOrOccupiedPair) {
     std::vector<UnityAssetSnapshot> files{{"Assets/A.cs", "// original\r\n"},
-                                          {"Assets/A.cs.meta", "guid: " + guid + "\r\nimporter: unchanged\r\n"}};
+                                          {"Assets/A.cs.meta", "guid: " + guid() + "\r\nimporter: unchanged\r\n"}};
     const auto plan = planUnityAssetMove(files, "Assets/A.cs", "Assets/B.cs");
     ASSERT_TRUE(plan);
     ASSERT_EQ(plan->size(), 2);
@@ -58,23 +58,23 @@ TEST(UnityAssets, MovePreservesOriginalMetaAndRefusesIncompleteOrOccupiedPair) {
 
 namespace {
 TEST(UnityAssets, ArrayItemsInlineCommentsAndQuotedContinuations) {
-    const std::string reference = "{fileID: -123, guid: " + guid + ", type: 3}";
+    const std::string reference = "{fileID: -123, guid: " + guid() + ", type: 3}";
     const std::string yaml = "%YAML 1.1\r\n  array:\r\n  - " + reference +
                              " # real\r\n  text: 'continued\r\n    fake: " + reference +
                              "\r\n    end'\r\n  actual: " + reference + "\r\n";
     const std::vector<UnityAssetSnapshot> files{{"Assets/S.prefab", yaml}};
     UnityAssetIndex index;
     index.reset(files);
-    ASSERT_EQ(index.usages(guid).size(), 2);
-    for (const auto& usage : index.usages(guid))
-        EXPECT_EQ(yaml.substr(usage.offset, 32), guid);
+    ASSERT_EQ(index.usages(guid()).size(), 2);
+    for (const auto& usage : index.usages(guid()))
+        EXPECT_EQ(yaml.substr(usage.offset, 32), guid());
 }
 TEST(UnityAssets, OversizedLineAndUnknownEncodingAreExplicitlyIncomplete) {
     const std::vector<UnityAssetSnapshot> files{{"Assets/S.prefab", "%YAML 1.1\n" + std::string(16385, '9')},
                                                 {"Assets/B.asset", std::string("\xff\xfe\0x", 4)}};
     UnityAssetIndex index;
     index.reset(files);
-    EXPECT_TRUE(index.usages(guid).empty());
+    EXPECT_TRUE(index.usages(guid()).empty());
     EXPECT_EQ(index.diagnostics().size(), 2);
 }
 } // namespace
@@ -93,9 +93,9 @@ TEST(UnityAssets, RoslynSelectedFieldsAndVoidEventsJoinOriginalObjectGuidIdentit
     frost::ManualClock clock;
     frost::io::MemFs fs{clock, frost::io::PathStyle::Posix};
     ASSERT_TRUE(fs.createDirectories("/p/Assets"));
-    ASSERT_TRUE(fs.writeFileAtomic("/p/Assets/Component.cs.meta", "guid: " + guid + "\n"));
+    ASSERT_TRUE(fs.writeFileAtomic("/p/Assets/Component.cs.meta", "guid: " + guid() + "\n"));
     const std::string yaml =
-        "%YAML 1.1\n--- !u!114 &10\nMonoBehaviour:\n  m_Script: {fileID: 11500000, guid: " + guid +
+        "%YAML 1.1\n--- !u!114 &10\nMonoBehaviour:\n  m_Script: {fileID: 11500000, guid: " + guid() +
         ", type: 3}\n  health: 17\n  onClick:\n    m_PersistentCalls:\n      m_Calls:\n      - m_Target: {fileID: "
         "10}\n        m_TargetAssemblyTypeName: Component, Assembly-CSharp\n        m_MethodName: Click\n        "
         "m_Mode: 1\n--- !u!114 &20\nMonoBehaviour:\n  health: 99\n";
@@ -112,7 +112,7 @@ TEST(UnityAssets, RoslynSelectedFieldsAndVoidEventsJoinOriginalObjectGuidIdentit
     EXPECT_NE(method.usages[0].usages[0].lineText.find("m_MethodName: Click"), std::string::npos);
     const std::vector<UnityAssetSnapshot> dirty{
         {"/p/Assets/Scene.unity", "%YAML 1.1\n--- !u!114 &10\nMonoBehaviour:\n  m_Script: {fileID: 11500000, guid: " +
-                                      guid + ", type: 3}\n  health: 31\n"}};
+                                      guid() + ", type: 3}\n  health: 31\n"}};
     auto overlay = queryUnityAssets(fs, files, dirty, "/p/Assets/Component.cs", 0, {}, "health", "field");
     ASSERT_EQ(overlay.usages.size(), 1);
     EXPECT_NE(overlay.usages[0].usages[0].lineText.find("health: 31"), std::string::npos);
@@ -124,10 +124,10 @@ TEST(UnityAssets, BlockSerializedFieldKeysRemainUsageEvidence) {
     frost::ManualClock clock;
     frost::io::MemFs fs{clock, frost::io::PathStyle::Posix};
     ASSERT_TRUE(fs.createDirectories("/p/Assets"));
-    ASSERT_TRUE(fs.writeFileAtomic("/p/Assets/Component.cs.meta", "guid: " + guid + "\n"));
+    ASSERT_TRUE(fs.writeFileAtomic("/p/Assets/Component.cs.meta", "guid: " + guid() + "\n"));
     ASSERT_TRUE(fs.writeFileAtomic(
         "/p/Assets/Scene.unity",
-        "%YAML 1.1\n--- !u!114 &10\nMonoBehaviour:\n  m_Script: {fileID: 11500000, guid: " + guid +
+        "%YAML 1.1\n--- !u!114 &10\nMonoBehaviour:\n  m_Script: {fileID: 11500000, guid: " + guid() +
             ", type: 3}\n  items:\n  - 17\n  nested:\n    health: 31\n  description: |\n    line one\n"));
     const std::vector<std::string> files{"/p/Assets/Component.cs", "/p/Assets/Scene.unity"};
     for (const auto* field : {"items", "nested", "description"}) {

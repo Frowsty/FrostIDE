@@ -243,7 +243,8 @@ std::shared_ptr<lang::LuaService> LanguageRegistryIntegration::service(std::stri
 namespace {
 sched::Task<Result<lang::Json>> commandFailure(Error error) { co_return std::unexpected(std::move(error)); }
 } // namespace
-sched::Task<Result<lang::Json>> LanguageRegistryIntegration::executeCommand(std::string path, std::string serverId,
+sched::Task<Result<lang::Json>> LanguageRegistryIntegration::executeCommand(const std::string& path,
+                                                                            const std::string& serverId,
                                                                             std::string command, lang::Json arguments,
                                                                             std::stop_token stop) {
     poll();
@@ -258,7 +259,8 @@ sched::Task<Result<lang::Json>> LanguageRegistryIntegration::executeCommand(std:
         return commandFailure(Error{ErrorCode::Unsupported, "The active provider did not advertise this command"});
     return entry->second->requester->request(
         "workspace/executeCommand",
-        lang::Json::object().set("command", std::move(command)).set("arguments", std::move(arguments)), stop);
+        lang::Json::object().set("command", std::move(command)).set("arguments", std::move(arguments)),
+        std::move(stop));
 }
 void LanguageRegistryIntegration::sync(DocumentEditorView& view) {
     auto server = service(view.path());

@@ -14,5 +14,5 @@ struct DxcReport {
 };
 Result<io::ProcessSpec> dxcSpec(const DxcProfile& profile);
 Result<std::vector<build::BuildDiagnostic>> parseDxcDiagnostics(std::string_view output, std::string_view root);
-Result<DxcReport> runDxc(io::IProcessLauncher& launcher, const DxcProfile& profile, std::stop_token stop = {});
+Result<DxcReport> runDxc(io::IProcessLauncher& launcher, const DxcProfile& profile, const std::stop_token& stop = {});
 } // namespace frost::app

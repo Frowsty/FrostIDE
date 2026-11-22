@@ -464,10 +464,8 @@ void Workbench::applyVerifiedUpdate() {
     QDir appParent(QCoreApplication::applicationDirPath());
     appParent.cdUp();
     const QString defaultBaseDir = appParent.absolutePath();
-    const QString folderVersion =
-        versionStr.contains(QLatin1Char('-')) ? versionStr : (versionStr + QStringLiteral("-beta"));
     const QString defaultSideBySideDir =
-        QDir::toNativeSeparators(defaultBaseDir + QStringLiteral("/FrostIDE-%1").arg(folderVersion));
+        QDir::toNativeSeparators(defaultBaseDir + QStringLiteral("/FrostIDE-%1").arg(versionStr));
 
     QDialog dialog(parentWin);
     dialog.setObjectName(QStringLiteral("updateInstallerDialog"));

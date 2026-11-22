@@ -388,7 +388,7 @@ Result<void> EngineIntegration::Impl::connectInstance(const EngineInstanceRecord
     return {};
 }
 
-Result<std::uint64_t> EngineIntegration::Impl::send(std::string method, lang::Json params,
+Result<std::uint64_t> EngineIntegration::Impl::send(const std::string& method, lang::Json params,
                                                     std::function<void(Result<lang::Json>)> completed,
                                                     bool workerCompletion, std::stop_token stop) {
     if (!admitted(epoch, root, trustRevision))
@@ -482,7 +482,7 @@ Result<std::uint64_t> EngineIntegration::Impl::send(std::string method, lang::Js
                 },
                 Qt::QueuedConnection);
         },
-        stop);
+        std::move(stop));
     if (!started) {
         lastError = started.error().message();
         return std::unexpected(started.error());

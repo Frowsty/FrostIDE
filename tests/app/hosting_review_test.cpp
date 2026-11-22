@@ -63,7 +63,8 @@ std::string details(HostingProvider provider, char base = 'b', char head = 'a') 
                                               {"start_sha", QString::fromStdString(hash('c'))}}}};
     return QJsonDocument(row).toJson().toStdString();
 }
-std::string files(HostingProvider provider, std::string patch = "@@ -10,3 +10,3 @@\n same\n-old\n+new\n final\n") {
+std::string files(HostingProvider provider,
+                  const std::string& patch = "@@ -10,3 +10,3 @@\n same\n-old\n+new\n final\n") {
     const QJsonObject row = provider == HostingProvider::GitHub ? QJsonObject{{"filename", "src/new name.cpp"},
                                                                               {"previous_filename", "old name.cpp"},
                                                                               {"status", "renamed"},
@@ -295,7 +296,8 @@ void confirmNext() {
             static_cast<QDialog*>(dialog)->done(QMessageBox::Yes);
     });
 }
-std::string comment(std::uint64_t id, std::uint64_t parent = 0, std::string body = "Actual provider comment fixture") {
+std::string comment(std::uint64_t id, std::uint64_t parent = 0,
+                    const std::string& body = "Actual provider comment fixture") {
     QJsonObject row{{"id", static_cast<qint64>(id)},
                     {"user", QJsonObject{{"login", "reviewer"}}},
                     {"body", QString::fromStdString(body)},

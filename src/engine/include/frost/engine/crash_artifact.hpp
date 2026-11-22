@@ -54,7 +54,7 @@ public:
     static constexpr std::size_t MaxDumpBytes = 256 * 1024 * 1024;
     [[nodiscard]] static Result<std::unique_ptr<CrashArtifactObserver>>
     capture(io::IFileSystem& fs, CrashArtifactSource source, IClock& clock);
-    [[nodiscard]] Result<CrashArtifactScan> poll(io::IFileSystem& fs, std::stop_token stop = {});
+    [[nodiscard]] Result<CrashArtifactScan> poll(io::IFileSystem& fs, const std::stop_token& stop = {});
     [[nodiscard]] const CrashArtifactSource& source() const noexcept { return m_source; }
 
 private:

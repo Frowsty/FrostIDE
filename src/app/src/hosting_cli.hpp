@@ -92,7 +92,7 @@ struct HostedCommentPage {
 // Worker-only actual metadata -> file page -> metadata; any head/base/start change discards it.
 [[nodiscard]] Result<HostedDiffSnapshot> loadHostedDiff(io::IProcessLauncher& launcher, const HostingRequest& request,
                                                         const std::function<bool()>& admitted,
-                                                        std::stop_token stop = {});
+                                                        const std::stop_token& stop = {});
 // Current provider identity must still equal the immutable reviewed snapshot before a line POST.
 [[nodiscard]] Result<void> verifyHostedDiff(io::IProcessLauncher& launcher, const HostingRequest& request,
                                             const std::function<bool()>& admitted, std::stop_token stop = {});

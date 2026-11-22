@@ -46,7 +46,9 @@
 namespace frost::app {
 namespace {
 using namespace std::chrono_literals;
+#ifdef _WIN32
 using rpc::Json;
+#endif
 
 constexpr std::string_view kScript = R"(-- SPDX-License-Identifier: Apache-2.0
 local Mixed = {}

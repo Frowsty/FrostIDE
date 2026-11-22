@@ -27,14 +27,17 @@ public:
         ambiguous |= selected && selected->getCanonicalDecl() != declaration->getCanonicalDecl();
         selected = declaration;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitVarDecl(clang::VarDecl* d) {
         consider(d, d->getLocation());
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitFunctionDecl(clang::FunctionDecl* d) {
         consider(d, d->getLocation());
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitDeclRefExpr(clang::DeclRefExpr* e) {
         consider(e->getDecl(), e->getLocation());
         return true;
@@ -45,23 +48,28 @@ public:
     const clang::Decl* target;
     bool used = false, opaque = false;
     explicit Uses(const clang::Decl* d) : target(d->getCanonicalDecl()) {}
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitDeclRefExpr(clang::DeclRefExpr* e) {
         used |= e->getDecl()->getCanonicalDecl() == target;
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitStmt(clang::Stmt* s) {
         opaque |= llvm::isa<clang::AsmStmt>(s);
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitOverloadExpr(clang::OverloadExpr* expression) {
         for (const auto* declaration : expression->decls())
             used |= declaration->getCanonicalDecl() == target;
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitUsingShadowDecl(clang::UsingShadowDecl* declaration) {
         used |= declaration->getTargetDecl()->getCanonicalDecl() == target;
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitFileScopeAsmDecl(clang::FileScopeAsmDecl*) {
         opaque = true;
         return true;
@@ -70,6 +78,7 @@ public:
 class Initializer final : public clang::RecursiveASTVisitor<Initializer> {
 public:
     bool safe = true;
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitExpr(clang::Expr* e) {
         safe &=
             e->getBeginLoc().isFileID() && e->getEndLoc().isFileID() && !e->getType().isVolatileQualified() &&

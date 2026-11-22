@@ -43,22 +43,26 @@ public:
         if (!valid()) {
             return fail(ErrorCode::IoError, "private desktop unavailable; refusing a visible engine fixture");
         }
-        auto spec = original;
 #ifdef _WIN32
+        auto spec = original;
         spec.desktop = m_desktop.name();
-#endif
         return io::realProcessLauncher().launch(spec);
+#else
+        return io::realProcessLauncher().launch(original);
+#endif
     }
     Result<std::unique_ptr<io::IAsyncProcess>> launchAsync(const io::ProcessSpec& original,
                                                            const io::AsyncContext& context) override {
         if (!valid()) {
             return fail(ErrorCode::IoError, "private desktop unavailable; refusing a visible engine fixture");
         }
-        auto spec = original;
 #ifdef _WIN32
+        auto spec = original;
         spec.desktop = m_desktop.name();
-#endif
         return io::realProcessLauncher().launchAsync(spec, context);
+#else
+        return io::realProcessLauncher().launchAsync(original, context);
+#endif
     }
 
 private:
@@ -257,7 +261,7 @@ TEST_F(FrostEngineRunCorpus, GeneratedMultiplayerMembersStartTogetherAndOwnedSto
     for (std::size_t i = 0; i < outputs.size(); ++i) {
         auto config = (*configs)[i + 1];
         // Headless is the real runtime presentation option, preserving generated networking args.
-        config.arguments.push_back("--headless");
+        config.arguments.emplace_back("--headless");
         auto run = manager->start(config, outputs[i].handlers());
         ASSERT_TRUE(run) << run.error().describe();
         started.push_back(*run);

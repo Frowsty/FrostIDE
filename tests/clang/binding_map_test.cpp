@@ -166,7 +166,7 @@ protected:
             .set("registrations", std::move(registrations));
     }
 
-    std::optional<Json> run(Json input, int expectedExit = 0) {
+    std::optional<Json> run(const Json& input, int expectedExit = 0) {
         if (!write("request.json", input.dump()))
             return std::nullopt;
         auto before = snapshot(scratch.path());
@@ -684,7 +684,7 @@ TEST_F(BindingMapTest, MultipleCompilationContextsRequireExplicitSelection) {
     ASSERT_TRUE(refused.has_value());
     EXPECT_EQ(row(*refused, "direct").stringAt("reason"), "ambiguous-compilation-command");
     input.set("compileCommandIndex", 1);
-    auto selected = run(std::move(input));
+    auto selected = run(input);
     ASSERT_TRUE(selected.has_value());
     EXPECT_EQ(row(*selected, "direct").stringAt("status"), "mapped");
 }

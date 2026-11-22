@@ -30,7 +30,8 @@ HostingPanel::HostingPanel(HostingEnvironment environment, QWidget* parent)
       m_executable(new QLineEdit(this)), m_gitExecutable(new QLineEdit(this)),
       m_host(new QLineEdit(QStringLiteral("github.com"), this)), m_repository(new QLineEdit(this)),
       m_page(new QSpinBox(this)), m_reviews(new QTreeWidget(this)), m_details(new QPlainTextEdit(this)),
-      m_body(new QPlainTextEdit(this)), m_status(new QLabel(this)),
+      m_body(new QPlainTextEdit(this)), m_lines(new QTreeWidget(this)), m_lineSide(new QComboBox(this)),
+      m_tabs(new QTabWidget(this)), m_status(new QLabel(this)),
       m_cancel(new QPushButton(QStringLiteral("Cancel Request"), this)) {
     setObjectName(QStringLiteral("hostingPanel"));
     m_executable->setObjectName(QStringLiteral("hostingExecutable"));
@@ -67,9 +68,7 @@ HostingPanel::HostingPanel(HostingEnvironment environment, QWidget* parent)
     layout->addWidget(m_reviews, 1);
     m_details->setReadOnly(true);
     m_details->setObjectName(QStringLiteral("hostingDetails"));
-    m_tabs = new QTabWidget(this);
     m_tabs->addTab(m_details, QStringLiteral("Metadata / raw diff"));
-    m_lines = new QTreeWidget(this);
     m_lines->setObjectName(QStringLiteral("hostingDiffLines"));
     m_lines->setHeaderLabels({QStringLiteral("Provider path"), QStringLiteral("Old"), QStringLiteral("New"),
                               QStringLiteral("Actual patch line")});
@@ -88,7 +87,6 @@ HostingPanel::HostingPanel(HostingEnvironment environment, QWidget* parent)
     threadLayout->addWidget(m_commentDetails);
     m_tabs->addTab(discussions, QStringLiteral("Existing comments"));
     layout->addWidget(m_tabs, 2);
-    m_lineSide = new QComboBox(this);
     m_lineSide->setObjectName(QStringLiteral("hostingLineSide"));
     m_lineSide->addItems({QStringLiteral("New / RIGHT"), QStringLiteral("Old / LEFT")});
     layout->addWidget(m_lineSide);

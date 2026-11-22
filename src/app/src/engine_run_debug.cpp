@@ -87,7 +87,7 @@ struct EngineRunDebugCoordinator::Impl {
         if (jobs.empty())
             timer->stop();
     }
-    void abort(const std::shared_ptr<Job>& job, Error error) {
+    void abort(const std::shared_ptr<Job>& job, const Error& error) {
         if (job->phase == Phase::Finished)
             return;
         const bool adopted = job->phase == Phase::Adopted;
@@ -273,7 +273,7 @@ EngineRunDebugCoordinator::EngineRunDebugCoordinator(ui::RunController& runs, ru
                       return fail(ErrorCode::Cancelled, "Engine integration ended");
                   return guard->captureOwnedLuaDebugOwner(id);
               },
-              [guard = QPointer<EngineLuaDebugCoordinator>(&lua)](bool play, std::stop_token stop,
+              [guard = QPointer<EngineLuaDebugCoordinator>(&lua)](bool play, const std::stop_token& stop,
                                                                   MultiSessionDebugCoordinator::Prepared done,
                                                                   bool entry) -> Result<void> {
                   if (!guard)
@@ -292,7 +292,7 @@ EngineRunDebugCoordinator::EngineRunDebugCoordinator(ui::RunController& runs, ru
                                                      QObject* parent)
     : QObject(parent), m_impl(std::make_unique<Impl>(*this, runs, manager, std::move(hooks), options)) {}
 EngineRunDebugCoordinator::~EngineRunDebugCoordinator() { cancel(); }
-Result<void> EngineRunDebugCoordinator::prepare(const run::RunConfiguration& configuration, std::stop_token stop,
+Result<void> EngineRunDebugCoordinator::prepare(const run::RunConfiguration& configuration, const std::stop_token& stop,
                                                 MultiSessionDebugCoordinator::Prepared completed) {
     if (configuration.engineDebugMode != run::EngineDebugMode::Lua)
         return fail(ErrorCode::InvalidArgument, "Native + Lua requires the phased native engine launcher");

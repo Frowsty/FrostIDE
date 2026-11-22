@@ -16,8 +16,8 @@ namespace {
 bool safe(std::string_view text) { return text.find_first_of(std::string("\0\r\n", 3)) == std::string_view::npos; }
 using Json = detail::JsonValue;
 bool array(const Json* value) { return value && value->kind == Json::Kind::Array; }
-Result<void> packages(ManagedPackageReport& report, const Json* rows, std::string framework, std::string source,
-                      bool transitive, bool search) {
+Result<void> packages(ManagedPackageReport& report, const Json* rows, const std::string& framework,
+                      const std::string& source, bool transitive, bool search) {
     if (!array(rows))
         return fail(ErrorCode::Corrupt, "NuGet response has no package array");
     for (const auto& row : rows->items) {
@@ -40,7 +40,7 @@ Result<void> packages(ManagedPackageReport& report, const Json* rows, std::strin
                 const std::string severity = issue.stringMember("severity"),
                                   advisory = issue.stringMember("advisoryurl");
                 if (!package.status.empty())
-                    package.status += "\n";
+                    package.status += '\n';
                 package.status += severity + (advisory.empty() ? "" : ": " + advisory);
             }
         if (const auto* deprecation = row.find("deprecation"); deprecation && deprecation->kind == Json::Kind::Object) {
@@ -79,9 +79,9 @@ Result<io::ProcessSpec> managedPackageSpec(const ManagedPackageRequest& request)
             return fail(ErrorCode::InvalidArgument, "enter a NuGet search term");
         spec->arguments = {"package", "search", request.search, "--format", "json", "--take", "30"};
         if (request.prerelease)
-            spec->arguments.push_back("--prerelease");
+            spec->arguments.emplace_back("--prerelease");
         if (request.exactMatch)
-            spec->arguments.push_back("--exact-match");
+            spec->arguments.emplace_back("--exact-match");
         if (!request.configFile.empty())
             spec->arguments.insert(spec->arguments.end(), {"--configfile", request.configFile});
     } else if (request.query == PackageQuery::Restore) {
@@ -100,13 +100,13 @@ Result<io::ProcessSpec> managedPackageSpec(const ManagedPackageRequest& request)
         if (!request.project.targetFramework.empty())
             spec->arguments.insert(spec->arguments.end(), {"--framework", request.project.targetFramework});
         if (request.query == PackageQuery::Outdated)
-            spec->arguments.push_back("--outdated");
+            spec->arguments.emplace_back("--outdated");
         if (request.query == PackageQuery::Vulnerable)
-            spec->arguments.push_back("--vulnerable");
+            spec->arguments.emplace_back("--vulnerable");
         if (request.query == PackageQuery::Deprecated)
-            spec->arguments.push_back("--deprecated");
+            spec->arguments.emplace_back("--deprecated");
         if (request.prerelease && request.query == PackageQuery::Outdated)
-            spec->arguments.push_back("--include-prerelease");
+            spec->arguments.emplace_back("--include-prerelease");
         if (!request.configFile.empty()) {
             if (request.query != PackageQuery::Outdated)
                 return fail(ErrorCode::Unsupported, "this NuGet query uses the project NuGet.config hierarchy; "
@@ -170,7 +170,7 @@ Result<ManagedPackageReport> parseManagedPackageReport(std::string_view text, Pa
     return report;
 }
 Result<std::vector<ManagedPackageInput>>
-snapshotManagedPackageInputs(io::IFileSystem& fs, const std::vector<std::string>& paths, std::stop_token stop) {
+snapshotManagedPackageInputs(io::IFileSystem& fs, const std::vector<std::string>& paths, const std::stop_token& stop) {
     if (paths.size() > 4096)
         return fail(ErrorCode::OutOfRange, "Too many MSBuild input files");
     std::vector<ManagedPackageInput> snapshots;

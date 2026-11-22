@@ -88,7 +88,7 @@ Result<text::ByteRange> strictRange(const text::Snapshot& snapshot, const lang::
 }
 
 Result<void> admitted(const BindingProviderRequest& request, const BindingQueryAdmission& current,
-                      std::stop_token stop) {
+                      const std::stop_token& stop) {
     if (stop.stop_requested())
         return fail(ErrorCode::Cancelled, "The binding query was cancelled");
     if (!request.requester || !validProvider(request.seed.provider) || !current)
@@ -191,7 +191,7 @@ Result<void> appendEdits(std::vector<BindingPreviewEdit>& result, const BindingP
 
 template<class Request>
 Result<void> validateAll(const std::vector<Request>& requests, const BindingQueryAdmission& current,
-                         std::stop_token stop) {
+                         const std::stop_token& stop) {
     if (requests.empty() || !current)
         return fail(ErrorCode::InvalidArgument, "A binding query requires explicit targets and capture admission");
     for (const auto& request : requests) {
@@ -462,7 +462,7 @@ sched::Task<Result<std::vector<BindingUsage>>> queryBindingUsages(std::vector<Bi
 }
 
 Result<void> binding_detail::validateRenameRequests(const std::vector<BindingRenameRequest>& requests,
-                                                    const BindingQueryAdmission& current, std::stop_token stop) {
+                                                    const BindingQueryAdmission& current, const std::stop_token& stop) {
     return validateAll(requests, current, stop);
 }
 

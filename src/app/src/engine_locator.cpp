@@ -27,7 +27,7 @@ std::optional<std::string> canonicalFile(io::IFileSystem& fs, std::string_view p
     return std::move(*canonical);
 }
 
-std::optional<EngineInstallation> installation(io::IFileSystem& fs, std::string path, std::string root,
+std::optional<EngineInstallation> installation(io::IFileSystem& fs, const std::string& path, std::string root,
                                                std::string preset) {
     io::FileStatus cliStatus;
     auto cli = canonicalFile(fs, path, &cliStatus);
@@ -63,7 +63,7 @@ std::optional<EngineInstallation> installation(io::IFileSystem& fs, std::string 
 
 Result<std::vector<EngineInstallation>> locateEngineInstallations(io::IFileSystem& fs, std::string_view projectRoot,
                                                                   std::string_view configuredProgram,
-                                                                  std::stop_token stop) {
+                                                                  const std::stop_token& stop) {
     if (!io::isAbsolutePath(projectRoot) || (!configuredProgram.empty() && !io::isAbsolutePath(configuredProgram)))
         return fail(ErrorCode::InvalidArgument, "FrostEngine discovery requires absolute project and editor paths");
     std::vector<EngineInstallation> out;
@@ -112,7 +112,8 @@ Result<std::vector<EngineInstallation>> locateEngineInstallations(io::IFileSyste
 }
 
 Result<std::vector<EngineInstanceRecord>> listEngineInstances(io::IFileSystem& fs, std::string_view automationDirectory,
-                                                              std::string_view projectRoot, std::stop_token stop) {
+                                                              std::string_view projectRoot,
+                                                              const std::stop_token& stop) {
     if (!io::isAbsolutePath(automationDirectory) || !io::isAbsolutePath(projectRoot))
         return fail(ErrorCode::InvalidArgument, "FrostEngine instance discovery requires absolute paths");
     auto physicalRoot = fs.physicalPath(projectRoot);

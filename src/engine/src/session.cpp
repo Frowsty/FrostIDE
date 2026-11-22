@@ -584,7 +584,7 @@ struct EngineSession::Impl {
             buffered.append(bytes.data(), *read);
         }
     }
-    void watchLoop(std::stop_token stop) {
+    void watchLoop(const std::stop_token& stop) {
         while (!stop.stop_requested() && !stopping) {
             std::shared_ptr<Connection> conn;
             {
@@ -1051,8 +1051,8 @@ Result<std::unique_ptr<EngineSession>> EngineSession::create(EngineSessionOption
     auto result = std::unique_ptr<EngineSession>(new EngineSession(std::move(impl)));
     auto* state = result->m_impl.get();
     try {
-        state->watchdog = std::jthread([state](std::stop_token stop) { state->watchLoop(stop); });
-        state->worker = std::jthread([state](std::stop_token stop) { state->workLoop(stop); });
+        state->watchdog = std::jthread([state](const std::stop_token& stop) { state->watchLoop(stop); });
+        state->worker = std::jthread([state](std::stop_token stop) { state->workLoop(std::move(stop)); });
     } catch (const std::system_error&) {
         result->shutdown();
         return fail(ErrorCode::IoError, "cannot start engine session workers");
@@ -1091,7 +1091,7 @@ Result<std::uint64_t> EngineSession::request(std::string command, rpc::Json para
     pending.command = std::move(command);
     pending.params = std::move(params);
     pending.reply = std::move(reply);
-    pending.stop = stop;
+    pending.stop = std::move(stop);
     pending.deadline = deadline;
     m_impl->pending.emplace(id, std::move(pending));
     m_impl->cv.notify_all();
@@ -1126,7 +1126,7 @@ Result<std::uint64_t> EngineSession::requestObserved(std::string command, rpc::J
     pending.command = std::move(command);
     pending.params = std::move(params);
     pending.observedReply = std::move(reply);
-    pending.stop = stop;
+    pending.stop = std::move(stop);
     pending.deadline = deadline;
     m_impl->pending.emplace(id, std::move(pending));
     m_impl->cv.notify_all();
@@ -1155,7 +1155,7 @@ Result<std::uint64_t> EngineSession::bootstrapScriptDebug(const EngineIdentity& 
     item.id = id;
     item.command = "script.debug.bootstrap";
     item.params = rpc::Json::object();
-    item.stop = stop;
+    item.stop = std::move(stop);
     item.leaseStarted = Clock::now();
     item.deadline = item.leaseStarted + std::min(m_impl->options.connectTimeout, std::chrono::milliseconds(30000));
     item.scriptReply = std::move(reply);

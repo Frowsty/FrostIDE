@@ -23,8 +23,9 @@ struct UnityMergePreview {
 };
 // Worker only. Requires actual stage1/2/3 and regular UTF8 files (8MiB each), private temporary
 // copies, trusted exact tool admission, immutable Git OIDs, bounded source receipts and output.
-[[nodiscard]] Result<UnityMergePreview> prepareUnityMerge(const UnityMergeWork&, std::stop_token);
-[[nodiscard]] Result<void> validateUnityMergeSources(const UnityMergeWork&, const UnityMergePreview&, std::stop_token);
+[[nodiscard]] Result<UnityMergePreview> prepareUnityMerge(const UnityMergeWork&, const std::stop_token&);
+[[nodiscard]] Result<void> validateUnityMergeSources(const UnityMergeWork&, const UnityMergePreview&,
+                                                     const std::stop_token&);
 // Owner-thread modal waits for worker completion even after owner destruction or cancellation.
 [[nodiscard]] Result<UnityMergePreview> prepareUnityMergeInBackground(QWidget*, UnityMergeWork);
 [[nodiscard]] Result<bool> showUnityMergePreview(QWidget*, const UnityMergePreview&,

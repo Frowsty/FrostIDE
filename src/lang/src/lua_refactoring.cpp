@@ -53,7 +53,7 @@ bool identifier(std::string_view name) {
                                        "repeat return then true until while ";
     return words.find(" " + std::string(name) + " ") == words.npos;
 }
-Result<Model> model(const syntax::SyntaxTree& tree, std::stop_token stop) {
+Result<Model> model(const syntax::SyntaxTree& tree, const std::stop_token& stop) {
     syntax::LuaAstLimits limits;
     limits.stop = stop;
     auto projected = tree.luaAstProjection(limits);
@@ -168,7 +168,7 @@ Result<void> singleValueDeclaration(const Model& m, std::uint32_t statement) {
 }
 } // namespace
 Result<LuaRefactoringProposal> planLuaInlineVariable(const syntax::SyntaxTree& tree, ByteOffset selected,
-                                                     std::stop_token stop) {
+                                                     const std::stop_token& stop) {
     auto built = model(tree, stop);
     if (!built)
         return std::unexpected(built.error());
@@ -210,7 +210,7 @@ Result<LuaRefactoringProposal> planLuaInlineVariable(const syntax::SyntaxTree& t
     return fail(ErrorCode::NotFound, "Select a local declaration or its resolved reference");
 }
 Result<LuaRefactoringProposal> planLuaExtractFunction(const syntax::SyntaxTree& tree, text::ByteRange selected,
-                                                      std::string name, std::stop_token stop) {
+                                                      const std::string& name, const std::stop_token& stop) {
     if (!identifier(name))
         return fail(ErrorCode::InvalidArgument, "Use a fresh Lua function identifier");
     auto built = model(tree, stop);
@@ -241,11 +241,11 @@ Result<LuaRefactoringProposal> planLuaExtractFunction(const syntax::SyntaxTree& 
         }
     if (statements.empty())
         return fail(ErrorCode::Unsupported, "Selection must exactly cover complete statements in one block");
-    for (std::uint32_t i = 0; i < nodes.size(); ++i)
-        if (nodes[i].range.begin >= selected.begin && nodes[i].range.end <= selected.end) {
+    for (const auto& node : nodes)
+        if (node.range.begin >= selected.begin && node.range.end <= selected.end) {
             if (stop.stop_requested())
                 return fail(ErrorCode::Cancelled, "Lua refactoring cancelled");
-            const auto& kind = nodes[i].kind;
+            const auto& kind = node.kind;
             if (kind == "return_statement" || kind == "break_statement" || kind == "if_statement" ||
                 kind == "while_statement" || kind == "repeat_statement" || kind == "do_statement")
                 return fail(ErrorCode::Unsupported,

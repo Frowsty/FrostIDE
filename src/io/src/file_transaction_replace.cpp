@@ -66,6 +66,8 @@ struct Metadata {
 #ifdef _WIN32
     FILE_BASIC_INFO basic{};
     std::vector<unsigned char> security;
+    std::wstring shortName;
+    bool matchShortName = false;
 #else
     mode_t mode = 0;
     uid_t uid = 0;
@@ -87,7 +89,7 @@ Result<Native> openNative(std::string_view path, bool writable = false, bool dir
     if (writable)
         access |= GENERIC_WRITE | WRITE_DAC | FILE_WRITE_ATTRIBUTES;
     if (restoreSecurity)
-        access |= WRITE_DAC;
+        access |= WRITE_DAC | FILE_WRITE_ATTRIBUTES;
     Native file(CreateFileW(
         wide->c_str(), access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
         FILE_FLAG_BACKUP_SEMANTICS | (directory && followDirectory ? 0 : FILE_FLAG_OPEN_REPARSE_POINT), nullptr));
@@ -255,8 +257,10 @@ Result<Metadata> metadataOf(const Native& file, std::string_view path, bool priv
     const auto specialError = save_metadata::queryMetadata(file.get(), *wide, special);
     if (specialError != ERROR_SUCCESS)
         return std::unexpected(win32Error(specialError, "replacement: inspect object-ID/shortname", path));
-    if (special.hasObjectId || (!privateObject && !special.shortName.empty()))
-        return fail(ErrorCode::Unsupported, "replacement: observed object-ID/shortname outside first profile");
+    if (special.hasObjectId)
+        return fail(ErrorCode::Unsupported, "replacement: observed object-ID outside first profile");
+    static_cast<void>(privateObject);
+    result.shortName = std::move(special.shortName);
     std::array<wchar_t, 32> fs{};
     if (!GetVolumeInformationByHandleW(file.get(), nullptr, 0, nullptr, nullptr, nullptr, fs.data(),
                                        static_cast<DWORD>(fs.size())))
@@ -309,14 +313,17 @@ Result<Metadata> metadataOf(const Native& file, std::string_view path, bool priv
 
 bool sameObject(const Metadata& a, const Metadata& b) { return a.volume == b.volume && a.object == b.object; }
 
-bool sameSupportedMetadata(const Metadata& a, const Metadata& b, bool includeSecurity = true) {
+bool sameSupportedMetadata(const Metadata& a, const Metadata& b, bool includeSecurity = true,
+                           bool includeShortName = false) {
 #ifdef _WIN32
     return a.basic.FileAttributes == b.basic.FileAttributes &&
            a.basic.CreationTime.QuadPart == b.basic.CreationTime.QuadPart &&
            a.basic.LastWriteTime.QuadPart == b.basic.LastWriteTime.QuadPart &&
-           (!includeSecurity || a.security == b.security);
+           (!includeSecurity || a.security == b.security) &&
+           (!includeShortName || !b.matchShortName || a.shortName == b.shortName);
 #else
     static_cast<void>(includeSecurity);
+    static_cast<void>(includeShortName);
     return a.mode == b.mode && a.uid == b.uid && a.gid == b.gid && a.flags == b.flags &&
            a.modified.tv_sec == b.modified.tv_sec && a.modified.tv_nsec == b.modified.tv_nsec;
 #endif
@@ -388,7 +395,16 @@ Result<void> publishCapturedDacl(const Native& file, const Metadata& expected, s
         ((control & SE_DACL_PROTECTED) ? PROTECTED_DACL_SECURITY_INFORMATION : UNPROTECTED_DACL_SECURITY_INFORMATION);
     // This is a held, verified regular file. Restore the captured descriptor
     // without the legacy-to-automatic conversion performed by SetSecurityInfo.
-    if (!SetKernelObjectSecurity(file.get(), security, descriptor))
+    // NtSetSecurityObject keeps SE_DACL_AUTO_INHERITED only when SE_DACL_AUTO_INHERIT_REQ
+    // is also set on the input descriptor's Control word.
+    auto applied = expected.security;
+    if ((control & SE_DACL_AUTO_INHERITED) != 0) {
+        if (applied.size() < kSecurityControlOffset + sizeof(control))
+            return fail(ErrorCode::Corrupt, "replacement: captured security descriptor is truncated");
+        const auto requested = static_cast<SECURITY_DESCRIPTOR_CONTROL>(control | SE_DACL_AUTO_INHERIT_REQ);
+        std::memcpy(applied.data() + kSecurityControlOffset, &requested, sizeof(requested));
+    }
+    if (!SetKernelObjectSecurity(file.get(), security, applied.data()))
         return std::unexpected(lastWin32Error("replacement: restore captured DACL control state", path));
     return {};
 }
@@ -515,6 +531,9 @@ Result<void> renameNoReplace(const Native& file, const Native& fromParent, std::
     static_cast<void>(fromParent);
     static_cast<void>(from);
     static_cast<void>(toParent);
+    FILE_BASIC_INFO beforeBasic{};
+    const bool capturedBeforeBasic =
+        GetFileInformationByHandleEx(file.get(), FileBasicInfo, &beforeBasic, sizeof(beforeBasic)) != FALSE;
     auto wide = toWin32Path(to);
     if (!wide)
         return std::unexpected(wide.error());
@@ -529,6 +548,20 @@ Result<void> renameNoReplace(const Native& file, const Native& fromParent, std::
     std::memcpy(rename->FileName, wide->data(), bytes);
     if (!SetFileInformationByHandle(file.get(), FileRenameInfoEx, rename, static_cast<DWORD>(storage.size())))
         return std::unexpected(lastWin32Error("replacement: no-replace handle publication", to));
+    // On NTFS volumes with 8.3 shortnames enabled (e.g. C:), deleting a recent name leaves its
+    // CreationTime in NTFS's 15-second tunneling cache, which FileRenameInfoEx applies to the
+    // moved file. Restore the held object's own CreationTime immediately so tunneling does not
+    // corrupt captured metadata; if restoration fails, let the caller advance phase honestly and
+    // catch the mismatch in the post-rename verification.
+    if (capturedBeforeBasic) {
+        FILE_BASIC_INFO afterBasic{};
+        if (GetFileInformationByHandleEx(file.get(), FileBasicInfo, &afterBasic, sizeof(afterBasic)) &&
+            afterBasic.CreationTime.QuadPart != beforeBasic.CreationTime.QuadPart) {
+            FILE_BASIC_INFO restore{};
+            restore.CreationTime = beforeBasic.CreationTime;
+            SetFileInformationByHandle(file.get(), FileBasicInfo, &restore, sizeof(restore));
+        }
+    }
 #else
     static_cast<void>(file);
     const std::string fromLeaf(fileName(from)), toLeaf(fileName(to));
@@ -607,17 +640,18 @@ std::string metadataDigest(const Metadata& metadata) {
 
 Result<Native> checkedObjectAt(std::string_view path, const Metadata& expected, std::string_view bytes,
                                bool includeSecurity, bool privateObject, bool restoreSecurity = false,
-                               bool justPublished = false) {
+                               bool justPublished = false, bool checkShortName = true) {
     auto file = openNative(path, false, false, false, restoreSecurity);
     if (!file)
         return std::unexpected(file.error());
     auto actual = metadataOf(*file, path, privateObject);
     if (!actual)
         return std::unexpected(actual.error());
-    bool metadataMatches = sameSupportedMetadata(*actual, expected, includeSecurity);
+    const bool verifyShortName = checkShortName && !privateObject && !justPublished;
+    bool metadataMatches = sameSupportedMetadata(*actual, expected, includeSecurity, verifyShortName);
 #ifdef _WIN32
     if (!metadataMatches && includeSecurity && (privateObject || justPublished))
-        metadataMatches = sameSupportedMetadata(*actual, expected, false) &&
+        metadataMatches = sameSupportedMetadata(*actual, expected, false, false) &&
                           (retainedSecurityMatches(*actual, expected) ||
                            (justPublished && securityWasAutoInherited(actual->security, expected.security)));
 #else
@@ -635,15 +669,15 @@ Result<Native> checkedObjectAt(std::string_view path, const Metadata& expected, 
 }
 
 Result<void> objectAt(std::string_view path, const Metadata& expected, std::string_view bytes,
-                      bool includeSecurity = true, bool privateObject = false) {
-    auto checked = checkedObjectAt(path, expected, bytes, includeSecurity, privateObject);
+                      bool includeSecurity = true, bool privateObject = false, bool checkShortName = true) {
+    auto checked = checkedObjectAt(path, expected, bytes, includeSecurity, privateObject, false, false, checkShortName);
     return checked ? Result<void>{} : std::unexpected(checked.error());
 }
 
 Result<void> publishedOriginalAt(const Native& file, std::string_view path, const Metadata& expected,
-                                 std::string_view bytes) {
+                                 std::string_view bytes, bool restoreShortName = true) {
 #ifdef _WIN32
-    if (auto checked = checkedObjectAt(path, expected, bytes, true, false, false, true); !checked)
+    if (auto checked = checkedObjectAt(path, expected, bytes, true, false, false, true, false); !checked)
         return std::unexpected(checked.error());
     auto actual = metadataOf(file, path);
     if (!actual)
@@ -655,10 +689,15 @@ Result<void> publishedOriginalAt(const Native& file, std::string_view path, cons
         if (auto restored = publishCapturedDacl(file, expected, path); !restored)
             return restored;
     }
+    if (restoreShortName && expected.matchShortName && actual->shortName != expected.shortName) {
+        if (const DWORD error = save_metadata::restoreShortName(file.get(), expected.shortName); error != ERROR_SUCCESS)
+            return std::unexpected(win32Error(error, "replacement: restore captured shortname", path));
+    }
 #else
     static_cast<void>(file);
+    static_cast<void>(restoreShortName);
 #endif
-    return objectAt(path, expected, bytes);
+    return objectAt(path, expected, bytes, true, false, restoreShortName);
 }
 
 Result<void> releasePublicMutationHandle(Native& file, Native& identity, std::string_view path) {
@@ -681,12 +720,12 @@ Result<void> releasePublicMutationHandle(Native& file, Native& identity, std::st
 
 Result<void> retainPublicObject(Native& file, const Metadata& expected, std::string_view bytes,
                                 const Native& fromParent, std::string_view from, const Native& toParent,
-                                std::string_view to) {
+                                std::string_view to, bool checkShortName = true) {
 #ifdef _WIN32
     if (!file.valid()) {
         // Revalidate the acquired native object itself, then rename that same handle without replacing an endpoint.
         // On refusal, the local mutation handle closes before returning to the live workspace.
-        auto reopened = checkedObjectAt(from, expected, bytes, true, false, true);
+        auto reopened = checkedObjectAt(from, expected, bytes, true, false, true, false, checkShortName);
         if (!reopened)
             return std::unexpected(reopened.error());
         if (auto moved = renameNoReplace(*reopened, fromParent, from, toParent, to); !moved)
@@ -697,6 +736,7 @@ Result<void> retainPublicObject(Native& file, const Metadata& expected, std::str
 #else
     static_cast<void>(expected);
     static_cast<void>(bytes);
+    static_cast<void>(checkShortName);
 #endif
     return renameNoReplace(file, fromParent, from, toParent, to);
 }
@@ -864,6 +904,9 @@ Result<PreparedFileReplacement> prepareFileReplacement(std::string_view target, 
     auto before = metadataOf(*original, target);
     if (!before)
         return std::unexpected(before.error());
+#ifdef _WIN32
+    before->matchShortName = true;
+#endif
     auto store = openNative(privateStorePath, false, true);
     if (!store)
         return std::unexpected(store.error());
@@ -892,7 +935,7 @@ Result<PreparedFileReplacement> prepareFileReplacement(std::string_view target, 
 #endif
     state->parentPath = std::string(parentPath(state->receipt.images.targetPath));
     state->storePath = std::string(privateStorePath);
-    const auto retainedError = [&](Error error) -> std::unexpected<Error> {
+    const auto retainedError = [&](const Error& error) -> std::unexpected<Error> {
         return std::unexpected(Error(error.code(), error.describe() + "; original byte-stage receipt names '" +
                                                        state->receipt.replacementPath + "'; target was not retired"));
     };
@@ -945,9 +988,9 @@ Result<PreparedFileReplacement> prepareFileReplacement(std::string_view target, 
     state->receipt.privateAfterMetadataSha256 = metadataDigest(state->after);
 #ifdef _WIN32
     state->receipt.metadataProfile =
-        "LIMITED NTFS: basic attributes/creation/write times, owner/group/DACL captured; private stage DACL until "
-        "installation. SACL unobserved/unproven, not metadata-complete/Apply-ready. Observed "
-        "EA/ADS/shortname/objectID/special attributes refuse.";
+        "LIMITED NTFS: basic attributes/creation/write times, owner/group/DACL and target 8.3 short name captured; "
+        "private stage DACL until installation. SACL unobserved/unproven, not metadata-complete/Apply-ready. Observed "
+        "EA/ADS/objectID/special attributes refuse.";
 #else
     state->receipt.metadataProfile = "LIMITED ext4: mode/uid/gid/mtime and ordinary inode flags copied/verified; "
                                      "complete xattr name set must be empty. No atime/ctime/inode preservation "
@@ -1058,12 +1101,19 @@ FileReplacementOutcome PreparedFileReplacement::installAfter() {
                 !security)
                 return failed(security.error());
         }
+        if (state.before.matchShortName && securityState->shortName != state.before.shortName) {
+            if (const DWORD error = save_metadata::restoreShortName(state.replacement.get(), state.before.shortName);
+                error != ERROR_SUCCESS)
+                return failed(
+                    win32Error(error, "replacement: restore captured shortname", state.receipt.images.targetPath));
+        }
         auto installed = metadataOf(state.replacement, state.receipt.images.targetPath);
         if (!installed)
             return failed(installed.error());
-        if (!sameSupportedMetadata(*installed, state.before))
+        if (!sameSupportedMetadata(*installed, state.before, true, true))
             return failed(
                 Error(ErrorCode::IoError, "replacement: published supported metadata mismatch; retain both images"));
+        installed->matchShortName = state.before.matchShortName;
         state.after = std::move(*installed);
         state.receipt.installedAfterMetadataSha256 = metadataDigest(state.after);
     }
@@ -1364,11 +1414,13 @@ FileReplacementOutcome PreparedFileReplacement::moveOriginalTo(std::string_view 
         state.receipt.phase != FileReplacementPhase::OriginalMoved)
         return failWith(Error(ErrorCode::Busy, "move participant is in another operation"));
     if (state.receipt.phase == FileReplacementPhase::OriginalMovedUnverified) {
-        if (auto published =
-                publishedOriginalAt(state.original, state.receipt.moveDestination, state.before, state.beforePayload);
+        if (auto published = publishedOriginalAt(state.original, state.receipt.moveDestination, state.before,
+                                                 state.beforePayload, false);
             !published)
             return failWith(published.error());
-    } else if (auto current = objectAt(state.receipt.moveDestination, state.before, state.beforePayload); !current)
+    } else if (auto current =
+                   objectAt(state.receipt.moveDestination, state.before, state.beforePayload, true, false, false);
+               !current)
         return failWith(current.error());
     if (auto released =
             releasePublicMutationHandle(state.original, state.originalIdentity, state.receipt.moveDestination);
@@ -1393,15 +1445,17 @@ FileReplacementOutcome PreparedFileReplacement::restoreMove() {
         state.receipt.phase == FileReplacementPhase::OriginalMovedUnverified) {
         if (state.receipt.phase == FileReplacementPhase::OriginalMovedUnverified) {
             if (auto published = publishedOriginalAt(state.original, state.receipt.moveDestination, state.before,
-                                                     state.beforePayload);
+                                                     state.beforePayload, false);
                 !published)
                 return failWith(published.error());
         }
-        if (auto current = objectAt(state.receipt.moveDestination, state.before, state.beforePayload); !current)
+        if (auto current =
+                objectAt(state.receipt.moveDestination, state.before, state.beforePayload, true, false, false);
+            !current)
             return failWith(current.error());
         if (auto moved =
                 retainPublicObject(state.original, state.before, state.beforePayload, state.moveParent,
-                                   state.receipt.moveDestination, state.store, state.receipt.retainedBeforePath);
+                                   state.receipt.moveDestination, state.store, state.receipt.retainedBeforePath, false);
             !moved)
             return failWith(moved.error());
         state.receipt.phase = FileReplacementPhase::MoveRetainedForInverse;
@@ -1525,7 +1579,7 @@ Result<void> PreparedFileReplacement::validateCurrent(bool after) const {
                 return staged;
         }
         return objectAt(after ? state.receipt.moveDestination : state.receipt.images.targetPath, state.before,
-                        state.beforePayload);
+                        state.beforePayload, true, false, !after);
     }
     if (after) {
         if (state.receipt.phase != FileReplacementPhase::AfterInstalled)
@@ -1598,7 +1652,18 @@ Result<std::string> ensurePrivateTransactionStore(std::string_view target, std::
 #endif
     if (!sameVolume) {
         const auto base = workspaceRoot.empty() ? parentPath(target) : parentPath(workspaceRoot);
-        auto fallback = joinPath(base, ".frost-refactoring-" + userTag);
+        std::string name = ".frost-refactoring-" + userTag;
+        if (!workspaceRoot.empty()) {
+            std::string key = normalizePath(workspaceRoot).value_or(std::string(workspaceRoot));
+#ifdef _WIN32
+            std::ranges::transform(key, key.begin(), [](unsigned char ch) {
+                return (ch >= 'A' && ch <= 'Z') ? static_cast<char>(ch - 'A' + 'a') : static_cast<char>(ch);
+            });
+#endif
+            name += '-';
+            name += sha256Hex(key).substr(0, 16);
+        }
+        auto fallback = joinPath(base, name);
         if (!fallback)
             return std::unexpected(fallback.error());
         chosen = std::move(*fallback);
@@ -1745,6 +1810,9 @@ Result<PreparedFileReplacement> recoverFileReplacement(const FileReplacementRece
                             "retained Before data/metadata changed; recovery refuses inverse authority");
             state->original = std::move(*file);
             state->before = std::move(*meta);
+#ifdef _WIN32
+            state->before.matchShortName = path == saved.images.targetPath;
+#endif
             beforeLocation = path;
             break;
         }
@@ -1753,7 +1821,7 @@ Result<PreparedFileReplacement> recoverFileReplacement(const FileReplacementRece
     for (const auto& path : std::array<std::string, 2>{saved.replacementPath, saved.images.targetPath}) {
         auto file = openNative(path, true);
         if (!file)
-            file = openNative(path);
+            file = openNative(path, false, false, false, true);
         if (!file)
             continue;
         auto meta = metadataOf(*file, path, path == saved.replacementPath);

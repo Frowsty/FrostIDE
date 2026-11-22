@@ -21,11 +21,12 @@ TEST(NativeCoverageReal, InstrumentedRunMatchesActualLlvmCovSourceCounts) {
     );
     ASSERT_TRUE(fs.writeFileAtomic(source, "int cold(){return 9;}\nint hot(){return 0;}\nint main(){return hot();}\n"));
     const auto compiler = io::normalizePath(FROST_TEST_CXX_COMPILER).value();
-    const auto tool = [&](std::string name) {
+    const auto tool = [&](std::string_view name) {
 #ifdef _WIN32
-        name += ".exe";
-#endif
+        return io::joinPath(io::parentPath(compiler), std::string(name) + ".exe").value();
+#else
         return io::joinPath(io::parentPath(compiler), name).value();
+#endif
     };
     io::ProcessSpec compile;
     compile.executable = compiler;

@@ -27,7 +27,7 @@ public:
     UnrealBuildBackend(project::UnrealProject model, io::IFileSystem& fs, io::IProcessLauncher& launcher,
                        project::TrustStore& trust, build::BuildService& admission,
                        build::BuildServiceCallbacks callbacks = {});
-    ~UnrealBuildBackend();
+    ~UnrealBuildBackend() override;
     Result<void> openSolution(std::shared_ptr<const project::SolutionModel>) override;
     Result<void> closeSolution() override;
     std::shared_ptr<const project::SolutionModel> solution() const override { return {}; }
@@ -47,7 +47,7 @@ public:
     std::vector<build::BuildDiagnostic> diagnostics() const override { return m_diagnostics; }
     const project::UnrealProject& model() const { return m_model; }
     void attachMenu(ui::ShellWindow& window, std::function<Result<void>(std::string)> addEditor = {},
-                    std::function<void(const std::string&)> openFile = {},
+                    const std::function<void(const std::string&)>& openFile = {},
                     std::function<void()> semanticProfileChanged = {}, std::function<void()> inspectReflection = {});
     Result<void> selectCompileDatabase(std::string file);
     const std::string& compileDatabase() const { return m_databaseFile; }
@@ -56,7 +56,7 @@ public:
     void setCallbacks(build::BuildServiceCallbacks callbacks) { m_callbacks = std::move(callbacks); }
 
 private:
-    void showProjectModel(QWidget* host, std::function<void(const std::string&)> openFile);
+    void showProjectModel(QWidget* host, const std::function<void(const std::string&)>& openFile);
     void setState(build::BuildState state);
     bool admitted() const;
     void checkTrustRevision();

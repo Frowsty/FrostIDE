@@ -366,6 +366,7 @@ Result<void> DebugController::startSession(std::string title, std::string progra
     if (m_options.trust == nullptr)
         return fail(ErrorCode::InvalidArgument, "the debugger has no trust store");
     const std::uint64_t generation = ++m_generation;
+    const bool hasPrivateOutput = static_cast<bool>(privateOutput);
     m_nativeOsThreadIdsVerified = false;
     const std::shared_ptr<Relay> relay = m_relay;
     debug::DebugSessionCallbacks callbacks{
@@ -392,7 +393,8 @@ Result<void> DebugController::startSession(std::string title, std::string progra
                             [threadId, frame](DebugController* self) { self->onFrameSelected(threadId, frame); });
             },
         .onOutput =
-            [relay, generation, privateOutput](std::string_view category, std::string_view text) {
+            [relay, generation, privateOutput = std::move(privateOutput)](std::string_view category,
+                                                                          std::string_view text) {
                 if (privateOutput) {
                     privateOutput(category, text);
                     return;
@@ -473,7 +475,7 @@ Result<void> DebugController::startSession(std::string title, std::string progra
     for (auto& [view, attached] : m_editors)
         if (attached->view)
             refreshMarkers(*view);
-    m_rerunAllowed = !attach && !privateOutput && m_options.allowRerun;
+    m_rerunAllowed = !attach && !hasPrivateOutput && m_options.allowRerun;
     m_state = debug::DebugState::Starting;
     m_configured = false;
     m_adapterStopped = false;

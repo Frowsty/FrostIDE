@@ -209,9 +209,9 @@ TEST(ManagedE2E, UnsavedCrossProjectUtf16NavigationAndRename) {
         EXPECT_EQ(library->stringAt("assemblySha256").size(), 64U);
         EXPECT_FALSE(library->stringAt("moduleId").empty());
         EXPECT_EQ(library->stringAt("extension"), ".cs");
-        auto evaluated =
-            pool.spawn(sched::Lane::UserVisible, request(pool, service, "frost/projectModel", lang::Json::object()))
-                .join();
+        auto evaluated = pool.spawn(sched::Lane::UserVisible,
+                                    request(pool, service, "frost/projectModel", lang::Json::object(), 15s))
+                             .join();
         ASSERT_TRUE(evaluated) << evaluated.error().describe();
         ASSERT_TRUE(evaluated->isArray());
         EXPECT_NE(evaluated->dump().find("App.csproj"), std::string::npos);
@@ -223,7 +223,7 @@ TEST(ManagedE2E, UnsavedCrossProjectUtf16NavigationAndRename) {
         ASSERT_TRUE(completion) << completion.error().describe();
         EXPECT_NE(completion->dump().find("SayHello"), std::string::npos);
         auto definition = pool.spawn(sched::Lane::UserVisible,
-                                     request(pool, service, "textDocument/definition", positionParams(*uri, 98)))
+                                     request(pool, service, "textDocument/definition", positionParams(*uri, 98), 15s))
                               .join();
         EXPECT_TRUE(definition && definition->dump().find("Greeter.cs") != std::string::npos);
         // Actual owned host proposals over a referenced-project overlay; source files stay unchanged.
@@ -244,7 +244,8 @@ TEST(ManagedE2E, UnsavedCrossProjectUtf16NavigationAndRename) {
                                     .set("end", position(start + (cursor ? 0 : selected.size()))));
             params.set("context", lang::Json::object().set("diagnostics", lang::Json::array()));
             return pool
-                .spawn(sched::Lane::UserVisible, request(pool, service, "textDocument/codeAction", std::move(params)))
+                .spawn(sched::Lane::UserVisible,
+                       request(pool, service, "textDocument/codeAction", std::move(params), 15s))
                 .join();
         };
         const auto semanticUri = lang::pathToUri(semanticFile);
@@ -263,7 +264,8 @@ TEST(ManagedE2E, UnsavedCrossProjectUtf16NavigationAndRename) {
                                    .set("range", lang::Json::object()
                                                      .set("start", position(start))
                                                      .set("end", position(start + (cursor ? 0 : selected.size()))))
-                                   .set("context", lang::Json::object().set("diagnostics", lang::Json::array()))))
+                                   .set("context", lang::Json::object().set("diagnostics", lang::Json::array())),
+                               15s))
                 .join();
         };
         const auto signature = semanticActions("int left", true);
@@ -273,22 +275,22 @@ TEST(ManagedE2E, UnsavedCrossProjectUtf16NavigationAndRename) {
         EXPECT_NE(signature->dump().find("right:"), std::string::npos);
         EXPECT_NE(signature->dump().find("frostManaged"), std::string::npos);
         const auto overloaded = semanticActions("int a,long b", true);
-        ASSERT_TRUE(overloaded);
+        ASSERT_TRUE(overloaded) << overloaded.error().describe();
         EXPECT_EQ(overloaded->dump().find("Swap first two parameters"), std::string::npos);
         const auto unused = semanticActions("Unused", true);
-        ASSERT_TRUE(unused);
+        ASSERT_TRUE(unused) << unused.error().describe();
         EXPECT_NE(unused->dump().find("Delete private declaration with no source references"), std::string::npos);
         const auto used = semanticActions("Used(){}", true);
-        ASSERT_TRUE(used);
+        ASSERT_TRUE(used) << used.error().describe();
         EXPECT_EQ(used->dump().find("Delete private declaration with no source references"), std::string::npos);
         const auto layoutField = semanticActions("instanceField", true);
-        ASSERT_TRUE(layoutField);
+        ASSERT_TRUE(layoutField) << layoutField.error().describe();
         EXPECT_EQ(layoutField->dump().find("Delete private declaration with no source references"), std::string::npos);
         const auto extract = semanticActions("int doubled=input*2; return doubled+1;", false);
-        ASSERT_TRUE(extract);
+        ASSERT_TRUE(extract) << extract.error().describe();
         EXPECT_NE(extract->dump().find("refactor.extract"), std::string::npos);
         const auto move = semanticActions("Extra {}", true);
-        ASSERT_TRUE(move);
+        ASSERT_TRUE(move) << move.error().describe();
         EXPECT_NE(move->dump().find("refactor.move"), std::string::npos);
         EXPECT_NE(move->dump().find("Extra.cs"), std::string::npos);
         auto unchangedSemantic = fs.readFileSnapshot(semanticFile, 4096U);
@@ -321,10 +323,10 @@ TEST(ManagedE2E, UnsavedCrossProjectUtf16NavigationAndRename) {
                                   .set("textDocument", lang::Json::object().set("uri", *shadowUri))
                                   .set("range", lang::Json::object()
                                                     .set("start", position(start))
-                                                    .set("end", position(start + (selected.starts_with("1") ? 1 : 0))))
+                                                    .set("end", position(start + (selected.starts_with('1') ? 1 : 0))))
                                   .set("context", lang::Json::object().set("diagnostics", lang::Json::array()));
             auto response = pool.spawn(sched::Lane::UserVisible,
-                                       request(pool, service, "textDocument/codeAction", std::move(parameters)))
+                                       request(pool, service, "textDocument/codeAction", std::move(parameters), 15s))
                                 .join();
             ASSERT_TRUE(response) << response.error().describe();
             EXPECT_EQ(response->dump().find("Introduce local for return value (Roslyn)"), std::string::npos);
@@ -333,9 +335,9 @@ TEST(ManagedE2E, UnsavedCrossProjectUtf16NavigationAndRename) {
         auto params = positionParams(*uri, 98);
         params.set("newName", "Welcome");
         auto rename =
-            pool.spawn(sched::Lane::UserVisible, request(pool, service, "textDocument/rename", std::move(params)))
+            pool.spawn(sched::Lane::UserVisible, request(pool, service, "textDocument/rename", std::move(params), 15s))
                 .join();
-        ASSERT_TRUE(rename.has_value());
+        ASSERT_TRUE(rename.has_value()) << rename.error().describe();
         const auto result = rename->dump();
         EXPECT_NE(result.find("Example.cs"), std::string::npos);
         EXPECT_NE(result.find("Greeter.cs"), std::string::npos);

@@ -6,7 +6,7 @@ Result<rpc::Json> inspectionInfo(std::string_view requested) {
     if (requested.empty() || requested.size() > 256)
         return fail(ErrorCode::InvalidArgument, "inspection id is required and bounded");
 #define FROST_ANALYZER_RULE(id, title, category, level, applicability, key, cfg)                                       \
-    if (requested == id)                                                                                               \
+    if (requested == (id))                                                                                             \
         return rpc::Json::object()                                                                                     \
             .set("id", id)                                                                                             \
             .set("title", title)                                                                                       \
@@ -14,7 +14,7 @@ Result<rpc::Json> inspectionInfo(std::string_view requested) {
             .set("defaultLevel", level)                                                                                \
             .set("applicability", applicability)                                                                       \
             .set("settingKey", key)                                                                                    \
-            .set("tier", cfg ? "T2-CFG" : "T2-AST")                                                                    \
+            .set("tier", (cfg) ? "T2-CFG" : "T2-AST")                                                                  \
             .set("engine", "frost-analyzer")                                                                           \
             .set("source", "source-owned-registry");
 #include "../../../resources/analyzer_rules.inc"

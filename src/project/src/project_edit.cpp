@@ -258,7 +258,7 @@ std::vector<ProjectPathChange> projectEditsForPathChange(const SolutionModel& so
 static Result<void> runProjectEditImpl(io::IProcessLauncher& launcher, const ProjectEditLaunch& launch,
                                        const ProjectEdit& edit,
                                        const std::function<bool(std::string_view digest)>& admit,
-                                       std::string* plannedResponse, std::stop_token stop) {
+                                       std::string* plannedResponse, const std::stop_token& stop) {
     if (stop.stop_requested())
         return fail(ErrorCode::Cancelled, "Project membership planning was cancelled");
     auto request = projectEditRequest(edit);
@@ -402,7 +402,7 @@ Result<void> runProjectEdit(io::IProcessLauncher& launcher, const ProjectEditLau
 }
 
 Result<ProjectEditPlan> runProjectEditPlan(io::IProcessLauncher& launcher, const ProjectEditLaunch& launch,
-                                           const ProjectEdit& edit, std::stop_token stop) {
+                                           const ProjectEdit& edit, const std::stop_token& stop) {
     if (edit.commit || !((edit.beforeFileMove && !edit.beforeFileCreate && edit.kind == ProjectEditKind::RenameFiles) ||
                          (edit.beforeFileCreate && !edit.beforeFileMove && edit.kind == ProjectEditKind::AddFiles)))
         return fail(ErrorCode::InvalidArgument, "Request an exclusive non-committing pre-move or pre-create plan");

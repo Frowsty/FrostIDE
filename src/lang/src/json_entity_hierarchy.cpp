@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <map>
+#include <ranges>
 #include <vector>
 namespace frost::lang {
 Result<Json> jsonEntityHierarchy(std::span<const JsonEntityStructureNode> nodes) {
@@ -42,12 +43,12 @@ Result<Json> jsonEntityHierarchy(std::span<const JsonEntityStructureNode> nodes)
             }
             if (current != absent && color[current] == 1)
                 return fail(ErrorCode::Corrupt, "Captured entity Parent values contain a cycle");
-            for (auto it = path.rbegin(); it != path.rend(); ++it) {
-                const auto parent = parents[*it];
-                depth[*it] = parent == absent ? 0 : depth[parent] + 1;
-                if (depth[*it] > 64)
+            for (const auto node : std::views::reverse(path)) {
+                const auto parent = parents[node];
+                depth[node] = parent == absent ? 0 : depth[parent] + 1;
+                if (depth[node] > 64)
                     return fail(ErrorCode::OutOfRange, "Captured entity hierarchy exceeds 64 Parent levels");
-                color[*it] = 2;
+                color[node] = 2;
             }
         }
     std::vector<LspRange> whole;

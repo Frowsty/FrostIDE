@@ -11,7 +11,7 @@ int checkSemanticCommand(std::string_view resourceDirectory) {
 #else
     const std::string root = "/frost-semantic-admission";
 #endif
-    const auto request = [&](std::vector<std::string> arguments) {
+    const auto request = [&](const std::vector<std::string>& arguments) {
         llvm::json::Array argv;
         for (const auto& argument : arguments)
             argv.push_back(argument);
@@ -58,7 +58,7 @@ int checkSemanticCommand(std::string_view resourceDirectory) {
         std::vector<std::string> args{"clang++", "-c", root + "/unit.cpp"};
         args.insert(args.end(), unsafe.begin(), unsafe.end());
         error.clear();
-        if (semanticCommand(request(std::move(args)), resourceDirectory, error) || error.empty())
+        if (semanticCommand(request(args), resourceDirectory, error) || error.empty())
             return fail("Unsafe semantic command was admitted");
     }
     llvm::json::Array ordered;

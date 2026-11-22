@@ -15,11 +15,11 @@ namespace corpus = frost::test::binding;
 using corpus::Json;
 using namespace std::chrono_literals;
 
-Result<Json> cli(corpus::Evidence& evidence, std::string tag, const std::string& program, const std::string& project,
-                 std::string command, Json params = Json::object()) {
-    auto output =
-        evidence.command(std::move(tag), program,
-                         {command, "--params", params.dump(), "--project", project, "--log-level", "error"}, project);
+Result<Json> cli(corpus::Evidence& evidence, const std::string& tag, const std::string& program,
+                 const std::string& project, std::string command, const Json& params = Json::object()) {
+    auto output = evidence.command(
+        tag, program, {std::move(command), "--params", params.dump(), "--project", project, "--log-level", "error"},
+        project);
     if (!output)
         return std::unexpected(output.error());
     auto parsed = rpc::parseJson(output->stdoutBytes);
@@ -418,8 +418,9 @@ Result<std::vector<BindingUsage>> usages(Analysis& analysis, corpus::Evidence& e
     return actual;
 }
 
-Result<BindingSelectedRenamePreview> preview(Analysis& analysis, corpus::Evidence& evidence, std::string luaIdentity,
-                                             std::string luaName, std::string nativeName) {
+Result<BindingSelectedRenamePreview> preview(Analysis& analysis, corpus::Evidence& evidence,
+                                             const std::string& luaIdentity, const std::string& luaName,
+                                             const std::string& nativeName) {
     corpus::RecordingProvider native(*analysis.environment->native), lua(*analysis.environment->lua);
     std::optional<SelectedLuaBindingRename> selected;
     std::vector<BindingRenameRequest> nativeRenames;

@@ -306,7 +306,7 @@ void EditorView::setTheme(std::shared_ptr<const Theme> theme) {
             if (key && rgba && rgba->opaque())
                 data.colors[static_cast<std::size_t>(*key)] = *rgba;
         }
-        if (auto scheme = Theme::fromData(std::move(data)))
+        if (auto scheme = Theme::fromData(data))
             m_colors = EditorColors::fromTheme(*scheme);
     }
     viewport()->update();

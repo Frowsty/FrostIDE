@@ -97,9 +97,9 @@ Result<engine::EngineState> EngineIntegration::currentLuaDebugState(const Engine
     return *m_impl->state;
 }
 
-Result<void> EngineIntegration::connectLuaDebug(const EngineLuaDebugOwner& owner, debug::LuaDebugAdmission admission,
-                                                std::stop_token stop, debug::LuaDebugTransportCallbacks callbacks,
-                                                LuaConnected completed) {
+Result<void> EngineIntegration::connectLuaDebug(const EngineLuaDebugOwner& owner,
+                                                const debug::LuaDebugAdmission& admission, const std::stop_token& stop,
+                                                debug::LuaDebugTransportCallbacks callbacks, LuaConnected completed) {
     if (!completed || !admission || !owner.current || !owner.current() || stop.stop_requested())
         return fail(ErrorCode::Cancelled, "Lua debugger preparation is no longer current");
     QPointer<EngineIntegration> self(this);
@@ -136,12 +136,18 @@ Result<void> EngineIntegration::connectLuaDebug(const EngineLuaDebugOwner& owner
                     self->m_impl->background([self, owner, admission, stop, callbacks = std::move(callbacks),
                                               completed = std::move(completed), privateResult]() mutable {
                         auto bootstrap = std::move(**privateResult);
+                        debug::LuaDebugIdentity identity{std::move(bootstrap.projectPath),
+                                                         std::move(bootstrap.instanceId),
+                                                         std::move(bootstrap.generation),
+                                                         std::move(bootstrap.debugSessionId),
+                                                         bootstrap.processId,
+                                                         bootstrap.connectionGeneration};
+                        const auto port = bootstrap.port;
+                        const auto expiresAt = bootstrap.expiresAt;
                         debug::LuaDebugEndpoint endpoint(std::move(bootstrap).takeCredential());
-                        endpoint.identity = {bootstrap.projectPath, bootstrap.instanceId,
-                                             bootstrap.generation,  bootstrap.debugSessionId,
-                                             bootstrap.processId,   bootstrap.connectionGeneration};
-                        endpoint.port = bootstrap.port;
-                        endpoint.expiresAt = bootstrap.expiresAt;
+                        endpoint.identity = std::move(identity);
+                        endpoint.port = port;
+                        endpoint.expiresAt = expiresAt;
                         auto connection = std::make_shared<Result<debug::LuaDebugConnection>>(
                             debug::connectLuaDebugEndpoint(std::move(endpoint), admission,
                                                            std::chrono::steady_clock::now() + std::chrono::seconds(30),
@@ -171,7 +177,8 @@ Result<void> EngineIntegration::connectLuaDebug(const EngineLuaDebugOwner& owner
 }
 
 Result<void> EngineIntegration::commandForLua(const EngineLuaDebugOwner& owner, std::string method, lang::Json params,
-                                              engine::EngineSession::ObservedReply completed, std::stop_token stop) {
+                                              engine::EngineSession::ObservedReply completed,
+                                              const std::stop_token& stop) {
     if (!owner.current || !owner.current() || stop.stop_requested())
         return fail(ErrorCode::Cancelled, "Lua command owner is no longer current");
     if (owner.nativePaused && owner.nativePaused())
@@ -386,7 +393,8 @@ struct EngineLuaDebugCoordinator::Impl {
         job->deadline->start(milliseconds);
     }
     Result<void> launch(ui::DebugSessionRegistry& registry, bool startPlay, std::optional<std::string> scene,
-                        std::uint64_t frames, std::stop_token externalStop, EngineLuaDebugLifecycle lifecycle = {}) {
+                        std::uint64_t frames, const std::stop_token& externalStop,
+                        EngineLuaDebugLifecycle lifecycle = {}) {
         const auto group = registry.createGroup();
         if (group == 0)
             return fail(ErrorCode::Busy, "The Lua debugger group could not be reserved");
@@ -607,6 +615,7 @@ Result<void> EngineLuaDebugCoordinator::cancelPreparation(ui::DebugSessionId id,
     });
     if (found == m_impl->jobs.end())
         return fail(ErrorCode::NotFound, "This Lua preparation is no longer current");
+    // NOLINTNEXTLINE(performance-unnecessary-copy-initialization): finish() erases from m_impl->jobs while reading job
     const auto job = *found;
     if (job->configured)
         return fail(ErrorCode::Busy, "This Lua session is already configured");
@@ -629,7 +638,7 @@ void EngineLuaDebugCoordinator::cancel() {
     }
 }
 
-Result<void> EngineLuaDebugCoordinator::prepare(bool startPlay, std::stop_token stop, Prepared completed,
+Result<void> EngineLuaDebugCoordinator::prepare(bool startPlay, const std::stop_token& stop, Prepared completed,
                                                 bool stopOnEntry, EngineLuaDebugLifecycle lifecycle) {
     if (!m_impl->engine)
         return fail(ErrorCode::Cancelled, "The engine integration ended");
@@ -638,9 +647,9 @@ Result<void> EngineLuaDebugCoordinator::prepare(bool startPlay, std::stop_token 
         return std::unexpected(owner.error());
     return prepareForOwner(std::move(*owner), startPlay, stop, std::move(completed), stopOnEntry, std::move(lifecycle));
 }
-Result<void> EngineLuaDebugCoordinator::prepareForOwner(EngineLuaDebugOwner owner, bool startPlay, std::stop_token stop,
-                                                        Prepared completed, bool stopOnEntry,
-                                                        EngineLuaDebugLifecycle lifecycle) {
+Result<void> EngineLuaDebugCoordinator::prepareForOwner(EngineLuaDebugOwner owner, bool startPlay,
+                                                        const std::stop_token& stop, Prepared completed,
+                                                        bool stopOnEntry, EngineLuaDebugLifecycle lifecycle) {
     if (m_impl->jobs.size() >= 128)
         return fail(ErrorCode::Busy, "Too many retained Lua preparations");
     if (!m_impl->engine || !completed || stop.stop_requested() || !owner.current || !owner.current() || !owner.admit)
@@ -843,7 +852,7 @@ Result<void> EngineLuaDebugCoordinator::startAttached(ui::DebugSessionRegistry& 
     return m_impl->launch(sessions, startPlay, std::nullopt, 1, {});
 }
 Result<void> EngineLuaDebugCoordinator::debugScene(ui::DebugSessionRegistry& sessions, std::string scene,
-                                                   std::uint64_t frames, std::stop_token stop,
+                                                   std::uint64_t frames, const std::stop_token& stop,
                                                    EngineLuaDebugLifecycle lifecycle) {
     if (scene.empty() || io::isAbsolutePath(scene) || scene.find("..") != std::string::npos ||
         !scene.starts_with("Assets/") || !scene.ends_with(".fscene") || frames == 0)

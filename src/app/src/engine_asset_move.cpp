@@ -105,8 +105,8 @@ Result<void> EngineIntegration::recoverAssetMoveAfterNativeSettlement() {
     impl.refreshProjectContent();
     return {};
 }
-Result<void> EngineIntegration::prepareAssetMove(document::RefactoringPlan& plan, std::string oldPath,
-                                                 std::string newPath) {
+Result<void> EngineIntegration::prepareAssetMove(document::RefactoringPlan& plan, const std::string& oldPath,
+                                                 const std::string& newPath) {
     auto& impl = *m_impl;
     if (!impl.assetIndex || !impl.identity || !impl.session || !impl.session->connected())
         return fail(ErrorCode::Unsupported, "Pair FrostEditor and refresh its actual asset index before moving assets");
@@ -139,7 +139,7 @@ Result<void> EngineIntegration::prepareAssetMove(document::RefactoringPlan& plan
         return {};
     };
     const auto current = state->current;
-    state->request = [self, current](std::string method, lang::Json params) -> Result<lang::Json> {
+    state->request = [self, current](const std::string& method, lang::Json params) -> Result<lang::Json> {
         if (auto valid = current(); !valid)
             return std::unexpected(valid.error());
         struct Reply {
@@ -149,7 +149,7 @@ Result<void> EngineIntegration::prepareAssetMove(document::RefactoringPlan& plan
         };
         auto reply = std::make_shared<Reply>();
         auto sent = self->m_impl->send(
-            std::move(method), std::move(params),
+            method, std::move(params),
             [reply](Result<lang::Json> value) {
                 std::scoped_lock lock(reply->mutex);
                 reply->value = std::move(value);

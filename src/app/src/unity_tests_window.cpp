@@ -45,11 +45,11 @@ struct RequestedOperation {
 class UnityTestsWidget final : public QWidget {
 public:
     UnityTestsWidget(QWidget* parent, UnityTestsWindowContext context)
-        : QWidget(parent), m_context(std::move(context)) {
+        : QWidget(parent), m_context(std::move(context)), m_mode(new QComboBox(this)), m_table(new QTableWidget(this)),
+          m_details(new QPlainTextEdit(this)) {
         setObjectName("unityTestsWidget");
         auto* layout = new QVBoxLayout(this);
         auto* bar = new QHBoxLayout;
-        m_mode = new QComboBox(this);
         m_mode->addItems({"EditMode", "PlayMode"});
         m_mode->setObjectName("unityTestsMode");
         bar->addWidget(m_mode);
@@ -74,7 +74,7 @@ public:
                 message("Select actual discovered test rows");
                 return;
             }
-            start(true, std::move(ids));
+            start(true, ids);
         });
         m_failed = button(tr("Run Failed"), "unityTestsRunFailed", [this] {
             std::vector<std::string> ids;
@@ -85,7 +85,7 @@ public:
                 message("No actual failed tests are available");
                 return;
             }
-            start(true, std::move(ids));
+            start(true, ids);
         });
         m_stop = button(tr("Stop"), "unityTestsStop", [this] { cancelRun(); });
         layout->addLayout(bar);
@@ -94,14 +94,12 @@ public:
                               this);
         m_status->setWordWrap(true);
         layout->addWidget(m_status);
-        m_table = new QTableWidget(this);
         m_table->setColumnCount(3);
         m_table->setHorizontalHeaderLabels({tr("Unity test"), tr("Framework state"), tr("Seconds")});
         m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
         m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
         m_table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
         layout->addWidget(m_table, 1);
-        m_details = new QPlainTextEdit(this);
         m_details->setReadOnly(true);
         layout->addWidget(m_details, 1);
         connect(m_table, &QTableWidget::itemSelectionChanged, this, [this] {
@@ -318,7 +316,7 @@ private:
         }
         update();
     }
-    void start(bool run, std::vector<std::string> ids) {
+    void start(bool run, const std::vector<std::string>& ids) {
         if (m_pending || m_poll) {
             message("Wait for or stop the owned Unity test operation");
             return;
@@ -395,7 +393,7 @@ private:
         send(lang::Json::object().set("op", "snapshot").set("owner", m_owner).set("job", m_job),
              [this](const lang::Json& json) { page(json, {}, 0); });
     }
-    void page(const lang::Json& json, std::string expected, int offset) {
+    void page(const lang::Json& json, const std::string& expected, int offset) {
         auto result = parseUnityTestPage(json, expected, offset);
         if (!result || result->owner != m_owner || result->job != m_job) {
             message(result ? "Unity snapshot changed owner/job" : result.error().message());

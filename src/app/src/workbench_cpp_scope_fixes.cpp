@@ -123,7 +123,7 @@ sched::Task<void> prepare(io::IFileSystem* fs, io::IProcessLauncher* launcher, p
 }
 } // namespace
 void Workbench::prepareCppInspectionScopeFixes(lang::InspectionScope scope, lang::InspectionProfile profile,
-                                               std::stop_token cancel,
+                                               const std::stop_token& cancel,
                                                std::function<void(Result<document::RefactoringPlan>)> done) {
     if (m_shutDown || !m_pool || !m_clangd || !m_bridge || m_projectRoot.empty()) {
         done(fail(ErrorCode::Busy, "Open a C++ project before requesting scope fixes"));

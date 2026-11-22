@@ -88,7 +88,7 @@ LanguageBridge::LanguageBridge(Workbench& workbench)
         workbench.m_resourceGovernor = std::make_shared<sched::ResourceGovernor>();
     m_server.setShaderServer(std::make_shared<EngineShaderLanguageRequester>(
         *workbench.m_pool, workbench.m_resourceGovernor,
-        [self = QPointer<Workbench>(&workbench)](std::string method, lang::Json params, std::stop_token stop,
+        [self = QPointer<Workbench>(&workbench)](std::string method, lang::Json params, const std::stop_token& stop,
                                                  EngineShaderLanguageRequester::Reply reply) {
             if (!self) {
                 reply(fail(ErrorCode::Cancelled));
@@ -102,7 +102,7 @@ LanguageBridge::LanguageBridge(Workbench& workbench)
                         reply(fail(ErrorCode::Busy, "Pair a trusted engine for GLSL language features"));
                         return;
                     }
-                    self->m_engine->requestShaderLanguage(std::move(method), std::move(params), stop, std::move(reply));
+                    self->m_engine->requestShaderLanguage(method, std::move(params), stop, std::move(reply));
                 },
                 Qt::QueuedConnection);
         }));

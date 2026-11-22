@@ -26,9 +26,9 @@ protected:
     std::string helper = *frost::io::normalizePath(FROST_CLANG_BINARY);
     std::map<std::string, std::string> before;
     int exit = -1;
-    Json plan(std::map<std::string, std::string> files, std::vector<std::string> units, std::string anchor,
-              std::size_t offset, std::string name, std::vector<std::string> flags = {},
-              Json overlays = Json::array()) {
+    Json plan(const std::map<std::string, std::string>& files, const std::vector<std::string>& units,
+              const std::string& anchor, std::size_t offset, std::string name,
+              const std::vector<std::string>& flags = {}, Json overlays = Json::array()) {
         auto& fs = frost::io::realFileSystem();
         std::vector<Json> commands;
         for (const auto& [path, bytes] : files) {
@@ -61,7 +61,7 @@ protected:
                                  .set("seedTranslationUnit", "")
                                  .set("path", scratch.join(anchor))
                                  .set("offset", offset)
-                                 .set("newName", name)
+                                 .set("newName", std::move(name))
                                  .set("compilationDatabase", Json::array(std::move(commands)).dump())
                                  .set("overlays", std::move(overlays));
         frost::io::ProcessSpec spec;

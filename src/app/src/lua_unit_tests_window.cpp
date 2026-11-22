@@ -24,11 +24,12 @@ namespace {
 QString qs(std::string_view s) { return QString::fromUtf8(s.data(), static_cast<qsizetype>(s.size())); }
 class LuaTestsWindow final : public QWidget {
 public:
-    LuaTestsWindow(QWidget* parent, LuaUnitTestsContext context) : QWidget(parent), m_context(std::move(context)) {
+    LuaTestsWindow(QWidget* parent, LuaUnitTestsContext context)
+        : QWidget(parent), m_context(std::move(context)), m_profile(new QComboBox(this)),
+          m_tree(new ui::TestResultsTree(this)), m_output(new QPlainTextEdit(this)) {
         setObjectName(QStringLiteral("luaUnitTestsProvider"));
         auto* layout = new QVBoxLayout(this);
         auto* bar = new QHBoxLayout;
-        m_profile = new QComboBox(this);
         m_profile->setObjectName(QStringLiteral("luaTestProfile"));
         m_profile->addItems({QStringLiteral("Busted 2.2.0"), QStringLiteral("LuaUnit 3.5")});
         bar->addWidget(m_profile);
@@ -65,9 +66,7 @@ public:
             QStringLiteral("Select a Lua Script run configuration, choose its framework, then Discover."), this);
         m_status->setWordWrap(true);
         layout->addWidget(m_status);
-        m_tree = new ui::TestResultsTree(this);
         layout->addWidget(m_tree, 1);
-        m_output = new QPlainTextEdit(this);
         m_output->setReadOnly(true);
         m_output->setMaximumBlockCount(10000);
         layout->addWidget(m_output);

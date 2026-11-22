@@ -178,7 +178,7 @@ Result<bool> showSceneMerge(QWidget* owner, SceneMergeSnapshot snapshot,
         }
         auto result =
             sceneMergeInBackground(&dialog, [refresh, request = std::move(request)](std::stop_token stop) mutable {
-                return refresh(std::move(request), stop);
+                return refresh(std::move(request), std::move(stop));
             });
         if (owner && !alive) {
             dialog.reject();

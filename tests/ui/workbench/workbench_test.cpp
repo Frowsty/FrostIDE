@@ -50,6 +50,7 @@
 
 #include <chrono>
 #include <memory>
+#include <ranges>
 #include <set>
 #include <string>
 #include <utility>
@@ -158,9 +159,9 @@ struct Ide {
     }
     [[nodiscard]] const Notification* lastNotificationTitled(const QString& part) const {
         const auto& log = window->notifications().log();
-        for (auto it = log.rbegin(); it != log.rend(); ++it) {
-            if (it->notification.title.contains(part)) {
-                return &it->notification;
+        for (const auto& entry : std::views::reverse(log)) {
+            if (entry.notification.title.contains(part)) {
+                return &entry.notification;
             }
         }
         return nullptr;

@@ -73,6 +73,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <ranges>
 #include <set>
 #include <string>
 #include <string_view>
@@ -1121,9 +1122,9 @@ TEST(Workbench, WelcomeScreenListsRecentProjectsAndOpensOne) {
 // The external change notification the navigation workbench posts for `path`'s dirty buffer.
 const frost::ui::Notification* externalChangeNote(const WorkbenchRig& rig) {
     const auto& log = rig.window->notifications().log();
-    for (auto it = log.rbegin(); it != log.rend(); ++it) {
-        if (it->notification.title.contains(QStringLiteral("changed on disk"))) {
-            return &it->notification;
+    for (const auto& entry : std::views::reverse(log)) {
+        if (entry.notification.title.contains(QStringLiteral("changed on disk"))) {
+            return &entry.notification;
         }
     }
     return nullptr;
@@ -1132,9 +1133,9 @@ const frost::ui::Notification* externalChangeNote(const WorkbenchRig& rig) {
 // The hot-exit restore prompt (Restore, Discard) in the log, or nullptr.
 const frost::ui::Notification* restorePrompt(const WorkbenchRig& rig) {
     const auto& log = rig.window->notifications().log();
-    for (auto it = log.rbegin(); it != log.rend(); ++it) {
-        if (it->notification.title.contains(QStringLiteral("unsaved files"))) {
-            return &it->notification;
+    for (const auto& entry : std::views::reverse(log)) {
+        if (entry.notification.title.contains(QStringLiteral("unsaved files"))) {
+            return &entry.notification;
         }
     }
     return nullptr;

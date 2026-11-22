@@ -30,7 +30,7 @@ bool startsName(std::string_view name, std::string_view prefix) {
 bool word(char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '.' || c == '-'; }
 } // namespace
 Result<Json> queryMSBuildLanguage(const MSBuildLanguageInput& input, std::string_view method, const Json& params,
-                                  std::stop_token stop) {
+                                  const std::stop_token& stop) {
     if (method != "textDocument/completion" && method != "textDocument/definition" && method != "textDocument/hover")
         return fail(ErrorCode::Unsupported, "MSBuild language request is unsupported");
     if (input.source.size().value() > 1024U * 1024U)
@@ -199,19 +199,21 @@ sched::Task<Result<Json>> MSBuildLanguageService::answer(sched::IScheduler& sche
     queueImports(input.path, input.source.text());
     for (const auto& [path, bytes] : input.inputs)
         queueImports(path, bytes);
-    for (std::size_t i = 0; i < pending.size(); ++i) {
+    std::size_t i = 0;
+    while (i < pending.size()) {
+        const std::string next = std::move(pending[i++]);
         if (stop.stop_requested() || scheduler.stopToken().stop_requested())
             co_return fail(ErrorCode::Cancelled, "MSBuild input loading cancelled");
-        if (!seen.insert(documentKey(pending[i])).second)
+        if (!seen.insert(documentKey(next)).second)
             continue;
         if (seen.size() > 256 || total >= 4U * 1024U * 1024U)
             co_return fail(ErrorCode::OutOfRange, "MSBuild import graph exceeds language budget");
-        auto bytes = reader(pending[i], std::min<std::size_t>(1024U * 1024U, 4U * 1024U * 1024U - total));
+        auto bytes = reader(next, std::min<std::size_t>(1024U * 1024U, 4U * 1024U * 1024U - total));
         if (!bytes)
             continue; // Missing literal imports remain unresolved; never evaluated or invented.
         total += bytes->size();
-        input.inputs.emplace_back(pending[i], *bytes);
-        queueImports(pending[i], *bytes);
+        input.inputs.emplace_back(next, *bytes);
+        queueImports(next, *bytes);
     }
     co_return queryMSBuildLanguage(input, method, params, stop);
 }

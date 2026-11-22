@@ -91,7 +91,7 @@ bool isCMakeSource(std::string_view path) {
     return name == "CMakeLists.txt" || name.ends_with(".cmake");
 }
 Result<Json> queryCMakeLanguage(const CMakeLanguageInput& input, std::string_view method, const Json& params,
-                                std::stop_token stop) {
+                                const std::stop_token& stop) {
     if (stop.stop_requested())
         return fail(ErrorCode::Cancelled, "CMake analysis cancelled");
     if (method != "textDocument/completion" && method != "textDocument/definition" && method != "textDocument/hover")

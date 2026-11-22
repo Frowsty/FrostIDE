@@ -4,14 +4,17 @@
 
 #include "syntax/syntax_test_support.hpp"
 #include <gtest/gtest.h>
+
+#include <ranges>
+
 using namespace frost;
 namespace {
 Result<lang::LuaRefactoringProposal> inlineAt(std::string_view source, std::size_t offset) {
     return lang::planLuaInlineVariable(syntax::testing::parseNow(syntax::LanguageId::Lua, source), ByteOffset{offset});
 }
 std::string apply(std::string source, const lang::LuaRefactoringProposal& plan) {
-    for (auto it = plan.edits.rbegin(); it != plan.edits.rend(); ++it)
-        source.replace(it->range.begin.value(), it->range.end.value() - it->range.begin.value(), it->replacement);
+    for (const auto& edit : std::views::reverse(plan.edits))
+        source.replace(edit.range.begin.value(), edit.range.end.value() - edit.range.begin.value(), edit.replacement);
     return source;
 }
 } // namespace

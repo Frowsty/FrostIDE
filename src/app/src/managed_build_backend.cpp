@@ -71,11 +71,11 @@ sched::Task<void> buildManaged(std::shared_ptr<ManagedBuildJob> job,
         auto spec = build::managedProjectBuildSpec(model->request);
         if (!spec)
             return std::unexpected(spec.error());
-        spec->arguments.push_back("--no-restore");
+        spec->arguments.emplace_back("--no-restore");
         if (action == build::BuildAction::Clean)
             spec->arguments[0] = "clean";
         else if (action == build::BuildAction::Rebuild)
-            spec->arguments.push_back("-target:Rebuild");
+            spec->arguments.emplace_back("-target:Rebuild");
         build::DiagnosticResolver resolver(*fs, root);
         build::BuildCallbacks events;
         events.onLine = [callbacks](auto stream, std::string_view text) {
@@ -202,14 +202,14 @@ void ManagedBuildBackend::start(build::BuildAction action, std::uint64_t generat
     m_tasks.push_back(m_pool.spawn(sched::Lane::Background, buildManaged(m_job, m_model, m_root, m_trustRevision, &m_fs,
                                                                          &m_launcher, &m_trust, action, m_callbacks)));
 }
-void ManagedBuildBackend::finish(build::BuildOutcome outcome) {
+void ManagedBuildBackend::finish(const build::BuildOutcome& outcome) {
     if (m_job)
         m_job->release();
     if (m_callbacks.onFinished)
         m_callbacks.onFinished(outcome);
     setState(build::BuildState::Idle);
 }
-void ManagedBuildBackend::diagnostic(build::BuildDiagnostic value) {
+void ManagedBuildBackend::diagnostic(const build::BuildDiagnostic& value) {
     m_diagnostics.push_back(value);
     if (m_callbacks.onDiagnostic)
         m_callbacks.onDiagnostic(value);
@@ -223,7 +223,7 @@ void ManagedBuildBackend::cancel() {
         ++m_generation;
         build::BuildOutcome outcome;
         outcome.result.cancelled = true;
-        finish(std::move(outcome));
+        finish(outcome);
     } else
         setState(build::BuildState::Cancelling);
 }

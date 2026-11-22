@@ -204,8 +204,7 @@ Result<void> Workbench::openSolution(const std::string& path) {
     auto model = std::make_shared<const project::SolutionModel>(std::move(*loaded));
     m_solution = model;
     if (model->approximate())
-        notify(text("Approximate solution"), qs(std::string(model->approximationNotice())),
-               ui::NotificationKind::Warning);
+        notify(text("Approximate solution"), qs(model->approximationNotice()), ui::NotificationKind::Warning);
     if (auto opened = m_build->openSolution(model); !opened) {
         // The explorer still shows the solution; building is unavailable.
         notify(text("The build service cannot open %1").arg(qs(model->name())), qs(opened.error().message()),
@@ -343,7 +342,7 @@ Result<void> Workbench::openFolder(const std::string& path, bool discoverSolutio
                     restartClangdIfCMakeStateChanged();
             });
         connectCMakeRunConfigurations(); // RUN-2/RUN-3: the targets' run configurations.
-        m_cmake->setConfigureDebugger([this](std::string endpoint, std::string root,
+        m_cmake->setConfigureDebugger([this](std::string endpoint, const std::string& root,
                                              std::function<void()> cancel) -> Result<void> {
             if (!m_debug)
                 return fail(ErrorCode::Unsupported, "Debugger UI is unavailable");
@@ -538,6 +537,8 @@ void Workbench::offerProjectTrust() {
                     restartClangdIfCMakeStateChanged();
                 }
             }
+        } else if (m_options.clangd && !m_clangdTrusted) {
+            restartClangd();
         }
         m_luaObservedTrust = true;
         startLua(root);

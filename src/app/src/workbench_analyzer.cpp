@@ -42,7 +42,7 @@ AnalyzerSettings analyzerSettings(const settings::SettingsSnapshot& snapshot) {
                               .powerSave = snapshot.get(settings::key::analysisPowerSave)};
 #define FROST_ANALYZER_RULE(id, title, category, level, applicability, key, cfg)                                       \
     {                                                                                                                  \
-        const auto value = snapshot.get(settings::Key<std::string>{key});                                              \
+        const auto& value = snapshot.get(settings::Key<std::string>{key});                                             \
         if (value != "default")                                                                                        \
             captured.rules.emplace_back(std::string(id) + "=" + value);                                                \
     }

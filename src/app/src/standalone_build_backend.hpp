@@ -25,7 +25,7 @@ public:
                            project::TrustStore& trust, build::BuildService& admission,
                            build::BuildServiceCallbacks callbacks = {},
                            std::function<Result<std::string>()> findMake = {});
-    ~StandaloneBuildBackend();
+    ~StandaloneBuildBackend() override;
     Result<void> openSolution(std::shared_ptr<const project::SolutionModel>) override;
     Result<void> closeSolution() override;
     std::shared_ptr<const project::SolutionModel> solution() const override { return {}; }
@@ -36,7 +36,7 @@ public:
     void setSaveAllHook(build::SaveAllHook hook) override { m_save = std::move(hook); }
     Result<void> build(build::BuildAction action, std::optional<project::ProjectId> project) override;
     // Same admission/save/output path for the project menu's literal target and install actions.
-    Result<void> buildTarget(project::MakeAction action, std::string target = {});
+    Result<void> buildTarget(project::MakeAction action, const std::string& target = {});
     void cancel() override;
     Result<void> trust(std::string_view root) override;
     build::BuildState state() const override { return m_state; }

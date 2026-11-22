@@ -300,7 +300,7 @@ TEST_F(EngineDumpControllerTest, DestructionQueuesBlockedCleanupWithoutFilesyste
     } release{gate};
     controller.reset();
     work->drain();
-    work = std::make_shared<EngineDumpWorkBatch>([gate, gui = guiThread](std::string path) {
+    work = std::make_shared<EngineDumpWorkBatch>([gate, gui = guiThread](const std::string& path) {
         gate->onGui = QThread::currentThread() == gui;
         gate->entered = true;
         // Record an accidental GUI cleanup without hanging this regression on its own thread.

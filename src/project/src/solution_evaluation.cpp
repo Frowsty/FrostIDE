@@ -55,7 +55,7 @@ bool sameItems(const EvaluatedProjectItems& a, const EvaluatedProjectItems& b) {
 SolutionEvaluation::SolutionEvaluation(io::IProcessLauncher& launcher, io::IFileSystem& fs,
                                        std::shared_ptr<const SolutionModel> model, SolutionEvaluationOptions options)
     : m_launcher(launcher), m_fs(fs), m_model(std::move(model)), m_options(std::move(options)) {
-    m_worker = std::jthread([this](std::stop_token stop) { run(std::move(stop)); });
+    m_worker = std::jthread([this](const std::stop_token& stop) { run(stop); });
 }
 
 SolutionEvaluation::~SolutionEvaluation() { stopAndJoin(); }
@@ -128,7 +128,7 @@ bool SolutionEvaluation::storeResult(EvaluatedProjectItems items, std::optional<
     return changed;
 }
 
-void SolutionEvaluation::run(std::stop_token stop) {
+void SolutionEvaluation::run(const std::stop_token& stop) {
     const auto trusted = [this] { return m_options.trusted && m_options.trusted(); };
     const auto giveUp = [this](std::string why) {
         publish([&why](SolutionEvaluationStatus& status) {
@@ -189,7 +189,6 @@ void SolutionEvaluation::run(std::stop_token stop) {
     static_cast<void>(&m_launcher);
     static_cast<void>(&m_fs);
     giveUp("MSBuild evaluation needs Windows with Visual Studio or its Build Tools");
-    return;
 #else
     std::string msbuild = m_options.msbuildPath;
     if (msbuild.empty()) {

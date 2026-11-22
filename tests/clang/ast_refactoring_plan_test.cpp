@@ -18,9 +18,9 @@ using frost::rpc::Json;
 class AstRefactoring : public ::testing::Test {
 protected:
     frost::test::ScratchDir scratch{"ast-refactoring"};
-    Json plan(std::string source, std::string operation, std::string selection, Json order = Json::array(),
-              std::string name = "extracted", bool header = false, Json parameters = {},
-              std::vector<std::pair<std::string, std::string>> extraSources = {},
+    Json plan(const std::string& source, const std::string& operation, const std::string& selection,
+              Json order = Json::array(), std::string name = "extracted", bool header = false, Json parameters = {},
+              const std::vector<std::pair<std::string, std::string>>& extraSources = {},
               const std::vector<std::string>& extraArguments = {}) {
         const auto file = scratch.join(header ? "fixture.hpp" : "fixture.cpp");
         const auto unit = scratch.join("fixture.cpp");
@@ -72,7 +72,7 @@ protected:
                            .set("offset", offset)
                            .set("endOffset", offset + selection.size())
                            .set("operation", operation)
-                           .set("newName", name)
+                           .set("newName", std::move(name))
                            .set("parameterOrder", std::move(order))
                            .set("compilationDatabase", database)
                            .set("overlays", Json::array());
@@ -185,7 +185,7 @@ TEST_F(AstRefactoring, SignatureRefusesUsedRemovalNameCaptureAddressEscapeAndSid
 }
 TEST_F(AstRefactoring, SignatureNameCannotCaptureTypeLookupOrExpandThroughInsertionMacro) {
     const auto rows = [](std::string name) {
-        return Json::array({Json::object().set("oldIndex", 0).set("name", name)});
+        return Json::array({Json::object().set("oldIndex", 0).set("name", std::move(name))});
     };
     refused(plan("using T=char; int f(int x){return sizeof(T);}\n", "edit-signature", "f(", {}, "unused", false,
                  rows("T")));

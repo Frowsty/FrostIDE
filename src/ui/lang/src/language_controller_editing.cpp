@@ -73,7 +73,7 @@ void LanguageController::applyWorkspaceEdit(const fl::WorkspaceEdit& edit, const
 }
 
 void LanguageController::executeServerCommand(std::string commandName, std::vector<fl::Json> arguments,
-                                              const QString& label, std::shared_ptr<SemanticApply> semantic) {
+                                              const QString& label, const std::shared_ptr<SemanticApply>& semantic) {
     if (commandName.empty()) {
         return;
     }

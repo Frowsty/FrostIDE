@@ -500,7 +500,7 @@ EngineIntegration::EngineIntegration(Workbench& workbench)
             }
             if (std::string_view(method) == "play.step")
                 params.set("frames", self->m_impl->workbench.m_window->mainToolbar().engineStepFrames());
-            if (auto result = self->command(std::move(actualMethod), std::move(params)); !result)
+            if (auto result = self->command(actualMethod, std::move(params)); !result)
                 self->m_impl->setStatus(qs(result.error().message()));
         };
         action.enabled = [self, method](const input::ActionContext&) {
@@ -647,8 +647,8 @@ void EngineIntegration::shutdown() {
 }
 Result<void> EngineIntegration::refreshInstances() { return m_impl->refresh(); }
 void EngineIntegration::disconnect() { m_impl->clearSession(false); }
-Result<std::uint64_t> EngineIntegration::command(std::string method, lang::Json params) {
-    return m_impl->send(std::move(method), std::move(params));
+Result<std::uint64_t> EngineIntegration::command(const std::string& method, lang::Json params) {
+    return m_impl->send(method, std::move(params));
 }
 std::vector<run::RunConfiguration> EngineIntegration::configurations() const { return m_impl->generated(); }
 

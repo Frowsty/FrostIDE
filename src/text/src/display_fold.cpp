@@ -1058,8 +1058,9 @@ FoldLayer FoldLayer::updated(std::span<const TextChange> changes, std::span<cons
             bool valid = true;
             std::vector<EventPoint> pendingEvents;
             std::map<std::uint64_t, std::set<std::uint64_t>> knownStarts;
-            for (auto it = touched.rbegin(); it != touched.rend(); ++it) {
-                const ByteRange mapped{map(it->range.begin, Bias::Right), map(it->range.end, Bias::Left)};
+            for (const auto& touchedFold : touched | std::views::reverse) {
+                const ByteRange mapped{map(touchedFold.range.begin, Bias::Right),
+                                       map(touchedFold.range.end, Bias::Left)};
                 const auto splitsCrLf = [&](ByteOffset p) {
                     return p.value() > 0 && p < newText.size() && newText.byteAt(p - 1) == '\r' &&
                            newText.byteAt(p) == '\n';
@@ -1093,7 +1094,7 @@ FoldLayer FoldLayer::updated(std::span<const TextChange> changes, std::span<cons
                     auto [starts, begin] = next.m_foldAnchors.withAnchor(mapped.begin, Bias::Right);
                     auto [ends, end] = starts.withAnchor(mapped.end, Bias::Left);
                     next.m_foldAnchors = std::move(ends);
-                    const FoldRecord item{it->id.value, begin, end};
+                    const FoldRecord item{touchedFold.id.value, begin, end};
                     auto [left, right] =
                         next.m_foldRecords.split([&](const FoldRecordSummary& sum) { return sum.maxId >= item.id; });
                     next.m_foldRecords = FoldRecordTree::concat(
@@ -1102,7 +1103,7 @@ FoldLayer FoldLayer::updated(std::span<const TextChange> changes, std::span<cons
                     pendingEvents.push_back({mapped.end.value(), mapped.begin.value(), item.id, false});
                     continue;
                 }
-                auto restored = next.adding(mapped, it->id);
+                auto restored = next.adding(mapped, touchedFold.id);
                 if (!restored) {
                     if (restored.error().code() == ErrorCode::AlreadyExists)
                         continue;
@@ -1235,14 +1236,14 @@ FoldLayer FoldLayer::updated(std::span<const TextChange> changes, std::span<cons
             next.m_stats = {changedRuns.size(), 0, 0};
             next.m_foldAnchors = m_foldAnchors.transformed(edits, newText.version());
             next.m_folds.reset();
-            for (auto it = changedRuns.rbegin(); it != changedRuns.rend(); ++it) {
-                FoldRun changed = it->run;
-                changed.buffer =
-                    newText.summaryOf({map(ByteOffset{it->begin}, Bias::Left), map(ByteOffset{it->end}, Bias::Right)});
+            for (const auto& entry : changedRuns | std::views::reverse) {
+                FoldRun changed = entry.run;
+                changed.buffer = newText.summaryOf(
+                    {map(ByteOffset{entry.begin}, Bias::Left), map(ByteOffset{entry.end}, Bias::Right)});
                 if (changed.foldId == 0)
                     changed.projected = changed.buffer;
                 auto [left, tail] =
-                    next.m_runs.split([&](const FoldRunSummary& sum) { return sum.buffer.bytes > it->begin; });
+                    next.m_runs.split([&](const FoldRunSummary& sum) { return sum.buffer.bytes > entry.begin; });
                 const auto replacement =
                     changed.buffer.bytes == 0 ? FoldRunTree{} : FoldRunTree::fromItems(std::span(&changed, 1));
                 next.m_runs = concatIdentityRuns(concatIdentityRuns(left, replacement), tail.withoutFront());

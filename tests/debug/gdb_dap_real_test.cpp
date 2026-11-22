@@ -24,7 +24,7 @@ TEST(GdbDapReal, BreakpointThreadsStackValueStepAndNormalExit) {
     const auto line = 1 + std::ranges::count(std::string_view(*contents).substr(0, marker), '\n');
     auto trust = project::TrustStore::open(fs, FROST_GDB_TRUST_PATH);
     ASSERT_TRUE(trust);
-    ASSERT_TRUE((*trust)->trust(std::string(io::parentPath(FROST_DEBUGGEE_PATH))));
+    ASSERT_TRUE((*trust)->trust(io::parentPath(FROST_DEBUGGEE_PATH)));
     DebugTarget target{.program = FROST_DEBUGGEE_PATH, .inheritEnvironment = false};
     test::SessionRecorder recorder;
     auto session = startGdbDebugSession(**trust, target, gdbDapAdapterFactory(io::realProcessLauncher(), *gdb), {},

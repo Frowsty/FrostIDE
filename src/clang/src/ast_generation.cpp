@@ -17,6 +17,7 @@ public:
     unsigned width = ~0u;
     RecordSelection(clang::ASTContext& context, std::string path, std::string root, unsigned offset)
         : context(context), path(std::move(path)), root(std::move(root)), offset(offset) {}
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitCXXRecordDecl(clang::CXXRecordDecl* candidate) {
         if (!candidate->isThisDeclarationADefinition() || candidate->isImplicit())
             return true;

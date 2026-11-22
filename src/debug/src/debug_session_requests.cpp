@@ -30,7 +30,7 @@ std::int64_t DebugSession::State::inspect(std::string command, rpc::Json argumen
         done(fail(ErrorCode::Busy, "Inspection needs a paused session"));
         return 0;
     }
-    return send(command, std::move(arguments),
+    return send(std::move(command), std::move(arguments),
                 [weak = weak(), epoch, frame, thread, done = std::move(done)](Result<rpc::Json> body) {
                     auto self = weak.lock();
                     bool current = false;

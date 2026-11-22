@@ -140,7 +140,7 @@ sched::Task<void> checkRenameTask(io::IFileSystem* fs, io::IProcessLauncher* lau
 } // namespace
 
 void Workbench::checkCppRename(std::string path, lang::LspPosition position, std::string newName,
-                               lang::WorkspaceEdit required, lang::WorkspaceEdit offered, std::stop_token cancel,
+                               lang::WorkspaceEdit required, lang::WorkspaceEdit offered, const std::stop_token& cancel,
                                std::function<void(Result<void>)> done) {
     m_cppRenameStop.request_stop();
     m_cppRenameStop = std::stop_source{};

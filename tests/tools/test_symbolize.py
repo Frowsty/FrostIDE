@@ -439,6 +439,71 @@ class CheckSelfTestTest(TempDirTestCase):
         self.assertIn(f"0x{0x400000 + Fixture.CONTRACT_RETURN_OFFSET - 1:x}", child_calls[0])
         self.assertTrue(any(f"0x{Fixture.FREEZE_OFFSET - 1:x}" in command for command in fake.commands))
 
+    def test_linux_bare_soname_resolves_from_system_library_dirs_and_verifies_build_id(self) -> None:
+        fixture = Fixture(self.tmp, windows=False)
+        fixture.write_all()
+        libc_build_id = bytes.fromhex("fedcba9876543210fedcba9876543210fedcba98")
+        libc_base = 0x7FF800000000
+        syslib = self.tmp / "syslib"
+        syslib.mkdir()
+        libc_path = syslib / "libc.so.6"
+        libc_path.write_bytes(elf_bytes(build_id=libc_build_id))
+
+        builder = DumpBuilder(4)
+        builder.add_system_info(symbolize.PLATFORM_LINUX)
+        builder.add_modules([
+            (str(fixture.child), fixture.CONTRACT_BASE, 0x10000, fixture.codeview),
+            ("libc.so.6", libc_base, 0x10000, bpel(libc_build_id)),
+        ])
+        builder.add_exception(1, symbolize.LINUX_SIGABRT, 0, [], fixture.CONTRACT_BASE + 0x10)
+        frames = [fixture.CONTRACT_BASE + fixture.CONTRACT_RETURN_OFFSET, libc_base + 0x500]
+        builder.add_crashpad_info({"frost.fatal_reason": "contract-violation",
+                                   "frost.frames": " ".join(f"0x{f:x}" for f in frames)})
+        (fixture.artifacts / "contract" / "contract.dmp").write_bytes(builder.bytes())
+
+        table = fixture.table() | {("libc.so.6", 0x4FF): [("__libc_start_call_main", "", 0)]}
+        with mock.patch.object(symbolize, "LINUX_LIBRARY_DIRS", (syslib,)):
+            status, lines, fake = self.check(fixture, FakeSymbolizer(table))
+        self.assertEqual(status, 0, "\n".join(lines))
+        self.assert_all_ok(lines)
+        self.assertTrue(any(line.startswith("ok contract modules:") and "libc.so.6" in line for line in lines), lines)
+        self.assertTrue(any(f"--obj={libc_path}" in command for command in fake.commands))
+
+        # A bare SONAME in a system directory with a different GNU build ID must still fail.
+        libc_path.write_bytes(elf_bytes(build_id=bytes.fromhex("11" * 20)))
+        with mock.patch.object(symbolize, "LINUX_LIBRARY_DIRS", (syslib,)), \
+                mock.patch.object(symbolize, "_ldconfig_paths", return_value={}):
+            status, lines, _ = self.check(fixture, FakeSymbolizer(table))
+        self.assertEqual(status, 1)
+        self.assertTrue(any(line.startswith("FAILED contract modules:") and "libc.so.6: identity mismatch" in line
+                            for line in lines), lines)
+
+    def test_linux_bare_soname_falls_back_to_ldconfig_and_prefers_search_dirs(self) -> None:
+        build_id = bytes.fromhex("aa" * 20)
+        ld_dir = self.tmp / "ldconfig-lib"
+        ld_dir.mkdir()
+        ld_lib = ld_dir / "libcustom.so.1"
+        ld_lib.write_bytes(elf_bytes(build_id=build_id))
+        module = symbolize.Module("libcustom.so.1", 0x1000, 0x1000,
+                                  symbolize.Identity("gnu-build-id", build_id=build_id.hex()), "minidump")
+        with mock.patch.object(symbolize, "LINUX_LIBRARY_DIRS", ()), \
+                mock.patch.object(symbolize, "_ldconfig_paths", return_value={"libcustom.so.1": [ld_lib]}):
+            image, reason = symbolize.Symbolizer(sys.executable, []).locate(module)
+        self.assertEqual(reason, "")
+        self.assertIsNotNone(image)
+        self.assertEqual(image.path, ld_lib)
+
+        # Explicit --search-dir takes priority over system directories.
+        explicit_dir = self.tmp / "explicit-lib"
+        explicit_dir.mkdir()
+        explicit_lib = explicit_dir / "libcustom.so.1"
+        explicit_lib.write_bytes(elf_bytes(build_id=build_id))
+        with mock.patch.object(symbolize, "LINUX_LIBRARY_DIRS", (ld_dir,)):
+            image, reason = symbolize.Symbolizer(sys.executable, [explicit_dir]).locate(module)
+        self.assertEqual(reason, "")
+        self.assertIsNotNone(image)
+        self.assertEqual(image.path, explicit_lib)
+
     def test_wrong_line_wrong_address_and_identity_mismatch_fail(self) -> None:
         fixture = Fixture(self.tmp, windows=True)
         fixture.write_crash(address=0xBEEF)

@@ -202,7 +202,7 @@ sched::Task<void> ExtensionIntegration::reportCommand(QPointer<ExtensionIntegrat
             },
             Qt::QueuedConnection);
 }
-Result<void> ExtensionIntegration::executeCommand(std::string selected) {
+Result<void> ExtensionIntegration::executeCommand(const std::string& selected) {
     poll();
     if (!m_catalog || !m_workbench.m_registeredLanguages)
         return fail(ErrorCode::NotFound, "No extension language commands are configured");
@@ -226,7 +226,7 @@ Result<void> ExtensionIntegration::executeCommand(std::string selected) {
                 }
     return fail(ErrorCode::NotFound, "Extension command is disabled, removed or unknown");
 }
-Result<void> ExtensionIntegration::debugCurrentFile(std::string selected) {
+Result<void> ExtensionIntegration::debugCurrentFile(const std::string& selected) {
     poll();
     if (!m_catalog || !m_workbench.m_debug)
         return fail(ErrorCode::NotFound, "No extension debug controller is available");
@@ -345,7 +345,7 @@ Result<void> ExtensionIntegration::debugCurrentFile(std::string selected) {
         })));
     return {};
 }
-void ExtensionIntegration::adoptDebug(std::shared_ptr<PreparedDebug> prepared) {
+void ExtensionIntegration::adoptDebug(const std::shared_ptr<PreparedDebug>& prepared) {
     poll();
     if (m_pendingDebug != prepared)
         return;
@@ -527,6 +527,6 @@ Result<void> Workbench::setExtensionCatalog(std::string manifest) {
 lang::Json Workbench::extensionCatalogState() const {
     return m_extensions ? m_extensions->snapshot() : lang::Json::object();
 }
-Result<void> Workbench::debugWithExtension(std::string id) { return m_extensions->debugCurrentFile(std::move(id)); }
-Result<void> Workbench::executeExtensionCommand(std::string id) { return m_extensions->executeCommand(std::move(id)); }
+Result<void> Workbench::debugWithExtension(const std::string& id) { return m_extensions->debugCurrentFile(id); }
+Result<void> Workbench::executeExtensionCommand(const std::string& id) { return m_extensions->executeCommand(id); }
 } // namespace frost::app

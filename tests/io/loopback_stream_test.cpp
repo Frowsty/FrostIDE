@@ -33,14 +33,18 @@ void closeSocket(Socket socket) { close(socket); }
 #endif
 class Listener {
 public:
-    Listener() {
+    Listener()
+#ifndef _WIN32
+        : m_socket(socket(AF_INET, SOCK_STREAM, IPPROTO_TCP))
+#endif
+    {
 #ifdef _WIN32
         WSADATA data{};
         if (WSAStartup(MAKEWORD(2, 2), &data) != 0)
             return;
         m_initialized = true;
-#endif
         m_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+#endif
         if (m_socket == kInvalid)
             return;
         sockaddr_in address{};

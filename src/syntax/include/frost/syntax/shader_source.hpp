@@ -26,5 +26,5 @@ inline constexpr std::size_t kShaderMaxIncludes = 4096;
 // comments/strings and literal include directives. Conditional activity/macros stay unevaluated.
 // Over-limit input returns incomplete with no invented ranges or compiler diagnostics.
 [[nodiscard]] ShaderSourceScan scanShaderSource(std::string_view source, ShaderSourceKind kind,
-                                                std::stop_token stop = {});
+                                                const std::stop_token& stop = {});
 } // namespace frost::syntax

@@ -49,7 +49,8 @@ std::function<bool()> workerAdmission(const EngineUnitTestsSource& source) {
 class EngineTestsWidget final : public QWidget {
 public:
     EngineTestsWidget(QWidget* parent, EngineUnitTestsWindowContext context)
-        : QWidget(parent), m_context(std::move(context)) {
+        : QWidget(parent), m_context(std::move(context)), m_summary(new QLabel(this)), m_tree(new QTreeWidget(this)),
+          m_details(new QPlainTextEdit(this)) {
         m_relay->target = this;
         setObjectName(QStringLiteral("engineUnitTestsProvider"));
         auto* layout = new QVBoxLayout(this);
@@ -69,17 +70,14 @@ public:
         m_stop = button("engineTestsStop", QStringLiteral("Stop"));
         m_refresh = button("engineTestsRefresh", QStringLiteral("Refresh"));
         m_debug = button("engineTestsDebug", QStringLiteral("Debug Selected Scene"));
-        m_summary = new QLabel(this);
         m_summary->setObjectName(QStringLiteral("engineTestsSummary"));
         m_summary->setWordWrap(true);
         layout->addWidget(m_summary);
-        m_tree = new QTreeWidget(this);
         m_tree->setObjectName(QStringLiteral("engineTestsTree"));
         m_tree->setHeaderLabels({QStringLiteral("Scene / runtime case"), QStringLiteral("Actual outcome"),
                                  QStringLiteral("Measured duration")});
         m_tree->setSelectionMode(QAbstractItemView::SingleSelection);
         layout->addWidget(m_tree, 1);
-        m_details = new QPlainTextEdit(this);
         m_details->setObjectName(QStringLiteral("engineTestsDetails"));
         m_details->setReadOnly(true);
         m_details->setMaximumHeight(180);
@@ -210,34 +208,34 @@ private:
         auto* fs = m_context.fs;
         auto* launcher = m_context.launcher;
         const auto relay = m_relay;
-        m_worker =
-            std::jthread([this, relay, fs, launcher, source = std::move(*source), generation](std::stop_token stop) {
-                const auto physical = source.validatePhysical ? source.validatePhysical() : Result<void>{};
-                auto result =
-                    physical ? discoverEngineSceneTests(*fs, *launcher, source.options, workerAdmission(source), stop)
-                             : Result<EngineTestListing>(std::unexpected(physical.error()));
-                relay->post([this, result = std::move(result), generation]() mutable {
-                    m_busy = false;
-                    const auto now = current();
-                    if (generation != m_generation || !now || key(*now) != m_key) {
-                        actions();
-                        if (now)
-                            refresh();
-                        return;
-                    }
-                    if (result) {
-                        m_listing = std::move(*result);
-                        m_results.clear();
-                        m_summary->setText(
-                            QStringLiteral("%1 scene tests listed by FrostEngine.").arg(m_listing.tests.size()));
-                    } else {
-                        m_listing = {};
-                        m_results.clear();
-                        m_summary->setText(qs(result.error().message()));
-                    }
-                    render();
-                });
+        m_worker = std::jthread([this, relay, fs, launcher, source = std::move(*source),
+                                 generation](const std::stop_token& stop) {
+            const auto physical = source.validatePhysical ? source.validatePhysical() : Result<void>{};
+            auto result = physical
+                              ? discoverEngineSceneTests(*fs, *launcher, source.options, workerAdmission(source), stop)
+                              : Result<EngineTestListing>(std::unexpected(physical.error()));
+            relay->post([this, result = std::move(result), generation]() mutable {
+                m_busy = false;
+                const auto now = current();
+                if (generation != m_generation || !now || key(*now) != m_key) {
+                    actions();
+                    if (now)
+                        refresh();
+                    return;
+                }
+                if (result) {
+                    m_listing = std::move(*result);
+                    m_results.clear();
+                    m_summary->setText(
+                        QStringLiteral("%1 scene tests listed by FrostEngine.").arg(m_listing.tests.size()));
+                } else {
+                    m_listing = {};
+                    m_results.clear();
+                    m_summary->setText(qs(result.error().message()));
+                }
+                render();
             });
+        });
     }
     void run(std::vector<std::string> ids) {
         if (m_busy)
@@ -267,7 +265,7 @@ private:
         render();
         const auto relay = m_relay;
         m_worker = std::jthread([this, relay, fs, launcher, source = std::move(*source), listing = std::move(listing),
-                                 ids = std::move(ids), generation](std::stop_token stop) {
+                                 ids = std::move(ids), generation](const std::stop_token& stop) {
             EngineTestExecution result;
             const auto physical = source.validatePhysical ? source.validatePhysical() : Result<void>{};
             if (physical)
@@ -376,7 +374,7 @@ private:
         retireWorker();
         const auto relay = m_relay;
         m_worker = std::jthread([this, relay, fs, source = std::move(*source),
-                                 location = EngineTestLocation{path, line}, generation](std::stop_token stop) {
+                                 location = EngineTestLocation{path, line}, generation](const std::stop_token& stop) {
             const auto physical = source.validatePhysical ? source.validatePhysical() : Result<void>{};
             auto resolved = physical ? resolveEngineTestLocation(*fs, source.options.expectedProjectRoot, location)
                                      : Result<std::string>(std::unexpected(physical.error()));

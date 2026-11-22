@@ -7,7 +7,7 @@
 #include <gtest/gtest.h>
 namespace frost::app {
 namespace {
-lang::Json state(std::string job, std::string phase = "discovered") {
+lang::Json state(const std::string& job, std::string phase = "discovered") {
     return lang::Json::object()
         .set("version", 1)
         .set("available", true)
@@ -16,7 +16,7 @@ lang::Json state(std::string job, std::string phase = "discovered") {
         .set("job", job)
         .set("catalog", job)
         .set("mode", "EditMode")
-        .set("state", phase)
+        .set("state", std::move(phase))
         .set("message", "Actual fixture adapter state")
         .set("execution", "");
 }
@@ -31,7 +31,7 @@ lang::Json row() {
         .set("duration", 0.0)
         .set("truncated", false);
 }
-lang::Json page(std::string job) {
+lang::Json page(const std::string& job) {
     return state(job)
         .set("snapshot", std::string(32, 'b'))
         .set("total", 1)
@@ -57,7 +57,7 @@ TEST(UnityTestsWindow, MissingTrustedSelectedEditorNeverRequestsAProcessOrInvent
     int requests = 0;
     UnityTestsWindowContext context;
     context.selected = []() { return std::optional<UnityEditorIdentity>{}; };
-    context.request = [&](const auto&, const auto&, auto) { ++requests; };
+    context.request = [&](const auto&, const auto&, const auto&) { ++requests; };
     std::unique_ptr<QWidget> widget(createUnityTestsWidget(nullptr, std::move(context)));
     auto* discover = widget->findChild<QPushButton*>("unityTestsDiscover");
     ASSERT_NE(discover, nullptr);

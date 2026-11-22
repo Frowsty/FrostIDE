@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <array>
 #include <format>
+#include <ranges>
 #include <utility>
 
 namespace frost::lang {
@@ -261,10 +262,10 @@ std::optional<FrostEngineAssetLocation> locateFrostEngineAsset(io::IFileSystem& 
         if (equalsIgnoreAsciiCase(name, "Assets")) {
             if (!components.empty() && isFrostEngineProjectRoot(fs, parent)) {
                 std::string relativeBelowAssets;
-                for (auto it = components.rbegin(); it != components.rend(); ++it) {
+                for (const auto& component : std::views::reverse(components)) {
                     if (!relativeBelowAssets.empty())
                         relativeBelowAssets += '/';
-                    relativeBelowAssets += *it;
+                    relativeBelowAssets += component;
                 }
                 std::string projectAssetPath = std::string(name) + "/" + relativeBelowAssets;
                 return FrostEngineAssetLocation{

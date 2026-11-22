@@ -26,7 +26,7 @@ protected:
         input.projectRoot = root();
         input.physicalProjectRoot = fs.physicalPath(root()).value();
     }
-    void source(std::string value) {
+    void source(const std::string& value) {
         ASSERT_TRUE(fs.writeFileAtomic(input.path, value));
         auto document = text::Document::fromUtf8(value);
         ASSERT_TRUE(document);

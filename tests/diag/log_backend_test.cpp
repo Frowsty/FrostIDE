@@ -104,7 +104,7 @@ private:
     std::vector<std::string> m_created;
 };
 
-const frost::IClock::SystemTime kStart =
+constexpr frost::IClock::SystemTime kStart =
     frost::IClock::SystemTime(std::chrono::sys_days(std::chrono::year(2026) / 11 / 1)) + 18h + 59min + 12s;
 
 struct Rig {

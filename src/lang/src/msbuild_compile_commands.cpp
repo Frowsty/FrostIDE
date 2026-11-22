@@ -839,7 +839,7 @@ Result<std::optional<CompileCommandsLocation>> IndependentProjectEvaluation::loc
     if (m_final && !*m_final)
         return std::unexpected(m_final->error());
     if (m_first)
-        return std::optional<CompileCommandsLocation>(*m_first);
+        return m_first;
     if (m_final)
         return **m_final;
     return fail(ErrorCode::Cancelled, "project evaluation cancelled");

@@ -102,7 +102,7 @@ struct ParsedCsproj {
     std::vector<std::string> warnings;
 };
 
-Result<ParsedCsproj> readCsproj(io::IFileSystem& fs, std::string_view projectPath, std::stop_token stop) {
+Result<ParsedCsproj> readCsproj(io::IFileSystem& fs, std::string_view projectPath, const std::stop_token& stop) {
     if (stop.stop_requested())
         return fail(ErrorCode::Cancelled, "managed project read cancelled");
     auto normalized = detail::normalizeAbsolute(projectPath);

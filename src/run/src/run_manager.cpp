@@ -132,11 +132,11 @@ Result<LaunchPlan> launchPlanFor(const RunConfiguration& configuration) {
         arguments = configuration.interpreterArguments;
         if (configuration.type == RunType::LuaRepl) {
             if (configuration.luaRuntime != "luau")
-                arguments.push_back("-i");
+                arguments.emplace_back("-i");
         } else {
             arguments.push_back(configuration.target);
             if (configuration.luaRuntime == "luau" && !configuration.arguments.empty())
-                arguments.push_back("-a");
+                arguments.emplace_back("-a");
             arguments.insert(arguments.end(), configuration.arguments.begin(), configuration.arguments.end());
         }
     }

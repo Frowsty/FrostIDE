@@ -18,8 +18,8 @@ protected:
     frost::test::ScratchDir scratch{"create-from-usage"};
     std::string source = scratch.join("input.cpp"), header = scratch.join("box.hpp");
     std::string compiler = frost::io::normalizePath(FROST_TEST_CXX_COMPILER).value();
-    Json proposal(std::string bytes, std::string selection, std::string body, std::string resultType = "",
-                  std::string headerBytes = "", bool noExceptions = false, bool secondConfig = false,
+    Json proposal(const std::string& bytes, const std::string& selection, std::string body, std::string resultType = "",
+                  const std::string& headerBytes = "", bool noExceptions = false, bool secondConfig = false,
                   unsigned caretInside = 0) {
         auto& fs = frost::io::realFileSystem();
         EXPECT_TRUE(fs.writeFileAtomic(source, bytes));
@@ -29,11 +29,11 @@ protected:
 #ifdef _WIN32
         args.insert(args.end(), {"/std:c++20", "/c", source, "/Fo" + scratch.join("must-not-exist.obj")});
         if (noExceptions)
-            args.push_back("/EHs-c-");
+            args.emplace_back("/EHs-c-");
 #else
         args.insert(args.end(), {"-std=c++20", "-c", source, "-o", scratch.join("must-not-exist.o")});
         if (noExceptions)
-            args.push_back("-fno-exceptions");
+            args.emplace_back("-fno-exceptions");
 #endif
         frost::test::appendPinnedCompilerArguments(args);
         auto command = [&](const std::vector<std::string>& values) {
@@ -47,7 +47,7 @@ protected:
         };
         auto commands = Json::array({command(args)});
         if (secondConfig) {
-            args.push_back("-DALTERNATE=1");
+            args.emplace_back("-DALTERNATE=1");
             commands.push(command(args));
         }
         const auto tokenOffset = bytes.find(selection);
@@ -97,8 +97,7 @@ protected:
         const auto* files = value.find("files");
         ASSERT_NE(files, nullptr);
         for (const auto& file : files->items())
-            ASSERT_TRUE(frost::io::realFileSystem().writeFileAtomic(std::string(file.stringAt("path")),
-                                                                    file.stringAt("after")));
+            ASSERT_TRUE(frost::io::realFileSystem().writeFileAtomic(file.stringAt("path"), file.stringAt("after")));
         frost::io::ProcessSpec spec;
         spec.executable = compiler;
         spec.workingDirectory = scratch.path();
@@ -107,11 +106,11 @@ protected:
         spec.arguments = {"/std:c++20", source, "/Fe" + scratch.join("acceptance.exe"),
                           "/Fo" + scratch.join("acceptance.obj")};
         if (noExceptions)
-            spec.arguments.push_back("/EHs-c-");
+            spec.arguments.emplace_back("/EHs-c-");
 #else
         spec.arguments = {"-std=c++20", source, "-o", scratch.join("acceptance")};
         if (noExceptions)
-            spec.arguments.push_back("-fno-exceptions");
+            spec.arguments.emplace_back("-fno-exceptions");
 #endif
         auto result = frost::io::runToCompletion(frost::io::realProcessLauncher(), spec, "", std::chrono::minutes(2));
         ASSERT_TRUE(result);

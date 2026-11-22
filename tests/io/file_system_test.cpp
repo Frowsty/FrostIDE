@@ -30,6 +30,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -195,6 +196,25 @@ TEST(RealFileSystem, FailedReplaceKeepsTheOldContent) {
     EXPECT_TRUE(result.error().code() == ErrorCode::PermissionDenied || result.error().code() == ErrorCode::Busy)
         << result.error().describe();
     EXPECT_EQ(fs().readFile(file).value(), "old content");
+    EXPECT_TRUE(noTempFiles(dir.path()));
+}
+
+TEST(RealFileSystem, TransientReaderLockRetriesAndReplacesAtomically) {
+    const ScratchDir dir("fs-transient-lock");
+    const std::string file = dir.join("transient.txt");
+    ASSERT_TRUE(fs().writeFileAtomic(file, "old content").has_value());
+    const std::wstring wide = frost::io::toWin32Path(file).value();
+    const HANDLE holder =
+        CreateFileW(wide.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+    ASSERT_NE(holder, INVALID_HANDLE_VALUE);
+    std::jthread releaser([holder] {
+        Sleep(20);
+        CloseHandle(holder);
+    });
+    const auto result = fs().writeFileAtomic(file, "new content");
+    releaser.join();
+    ASSERT_TRUE(result.has_value()) << result.error().describe();
+    EXPECT_EQ(fs().readFile(file).value(), "new content");
     EXPECT_TRUE(noTempFiles(dir.path()));
 }
 

@@ -50,12 +50,11 @@ QString q(std::string_view text) { return QString::fromUtf8(text.data(), static_
 class ManagedToolsWidget final : public QWidget {
 public:
     ManagedToolsWidget(QWidget* parent, ManagedToolsContext context, bool tests)
-        : QWidget(parent), m_context(std::move(context)), m_tests(tests) {
+        : QWidget(parent), m_context(std::move(context)), m_tests(tests), m_form(new QWidget(this)),
+          m_project(new QComboBox(m_form)) {
         setObjectName(tests ? "dotnetTestsWidget" : "managedPackagesWidget");
         auto* outer = new QVBoxLayout(this);
-        m_form = new QWidget(this);
         auto* form = new QFormLayout(m_form);
-        m_project = new QComboBox(m_form);
         m_project->setEditable(true);
         m_project->setObjectName("managedProjectPath");
         if (m_context.projects)
@@ -401,7 +400,7 @@ private:
                         self->m_log->appendPlainText(q(text));
                 });
         };
-        callbacks.onExited = [self, output, done = std::move(done)](const build::RunExit& exit) {
+        callbacks.onExited = [self, output, done = std::move(done)](const build::RunExit& exit) mutable {
             build::BuildResult result;
             result.success =
                 exit.exitCode == 0 && !exit.stopped && !exit.waitFailed && !exit.cleanupFailed && !exit.decodingFailed;
@@ -462,7 +461,7 @@ private:
             error(spec.error().message());
             return;
         }
-        launch(*spec, [this, next = std::move(next)](const auto& exit, std::string output) {
+        launch(*spec, [this, next = std::move(next)](const auto& exit, const std::string& output) {
             if (!exit.success) {
                 error("MSBuild evaluation failed; see tool output");
                 return;
@@ -492,7 +491,7 @@ private:
             error(spec.error().message());
             return;
         }
-        launch(*spec, [this, query](const auto& exit, std::string output) {
+        launch(*spec, [this, query](const auto& exit, const std::string& output) {
             if (query == build::PackageQuery::Restore) {
                 error(exit.success ? "NuGet restore completed. Refresh package data and project evaluation."
                                    : "NuGet restore failed; see output");
@@ -561,7 +560,7 @@ private:
                 error(spec.error().message());
                 return;
             }
-            launch(*spec, [this, discover, report, reportOwner](const auto& exit, std::string output) {
+            launch(*spec, [this, discover, report, reportOwner](const auto& exit, const std::string& output) {
                 if (discover) {
                     reportOwner->remove();
                     if (!exit.success) {
@@ -815,11 +814,12 @@ void ManagedToolsWidget::edit(std::string operation) {
                     return;
                 }
                 spec->arguments = {helper, "--sdk", sdk};
-                const auto selectedProject = project, selectedCentral = central;
+                const auto& selectedProject = project;
+                const auto& selectedCentral = central;
                 launch(
                     *spec,
                     [this, selectedProject, selectedCentral, dependencies = std::move(dependencies), operation,
-                     package](const auto& exit, std::string output) {
+                     package](const auto& exit, const std::string& output) {
                         if (!exit.success) {
                             error("Package edit proposal failed; inspect tool output");
                             return;

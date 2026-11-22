@@ -23,7 +23,9 @@
 #include <algorithm>
 namespace frost::app {
 UnrealPartnerWindow::UnrealPartnerWindow(std::string projectFile, project::TrustStore& trust, QWidget* parent)
-    : QDialog(parent), m_project(std::move(projectFile)), m_root(io::parentPath(m_project)), m_trust(trust) {
+    : QDialog(parent), m_project(std::move(projectFile)), m_root(io::parentPath(m_project)), m_trust(trust),
+      m_port(new QSpinBox(this)), m_secret(new QLineEdit(this)), m_calls(new QTableWidget(0, 3, this)),
+      m_logs(new QPlainTextEdit(this)) {
     setAttribute(Qt::WA_DeleteOnClose);
     setWindowTitle(tr("Unreal local partner"));
     resize(950, 650);
@@ -35,11 +37,9 @@ UnrealPartnerWindow::UnrealPartnerWindow(std::string projectFile, project::Trust
     note->setWordWrap(true);
     layout->addWidget(note);
     auto* form = new QFormLayout();
-    m_port = new QSpinBox(this);
     m_port->setRange(1024, 65535);
     m_port->setValue(40000);
     m_port->setObjectName(QStringLiteral("unrealPartnerPort"));
-    m_secret = new QLineEdit(this);
     m_secret->setEchoMode(QLineEdit::Password);
     m_secret->setMaxLength(64);
     m_secret->setObjectName(QStringLiteral("unrealPartnerToken"));
@@ -75,7 +75,6 @@ UnrealPartnerWindow::UnrealPartnerWindow(std::string projectFile, project::Trust
     filter->setObjectName(QStringLiteral("unrealBlueprintFilter"));
     filter->setPlaceholderText(tr("Filter observed Blueprint or function object"));
     layout->addWidget(filter);
-    m_calls = new QTableWidget(0, 3, this);
     m_calls->setObjectName(QStringLiteral("unrealBlueprintCalls"));
     m_calls->setHorizontalHeaderLabels({tr("Blueprint object"), tr("Function object"), tr("Actual graph node")});
     m_calls->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -83,7 +82,6 @@ UnrealPartnerWindow::UnrealPartnerWindow(std::string projectFile, project::Trust
     layout->addWidget(m_calls);
     m_calls->setToolTip(tr("Snapshot from the last explicit refresh. Refresh after graph edits."));
     connect(filter, &QLineEdit::textChanged, this, [this] { applyBlueprintFilter(); });
-    m_logs = new QPlainTextEdit(this);
     m_logs->setReadOnly(true);
     m_logs->document()->setMaximumBlockCount(1000);
     layout->addWidget(m_logs);

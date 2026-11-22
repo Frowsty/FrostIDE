@@ -265,7 +265,7 @@ Result<std::vector<std::string>> frameworkArguments(FrameworkProfile profile, co
     if (catch2) {
         result.insert(result.end(), {"--reporter", "xml", "--out", std::string(report)});
         if (listing)
-            result.push_back("--list-tests");
+            result.emplace_back("--list-tests");
         else
             result.insert(result.end(), {"--durations", "yes"});
     } else if (listing) {
@@ -298,8 +298,8 @@ Result<TestResult> parseFrameworkRun(FrameworkProfile profile, std::string_view 
         return fail(ErrorCode::Unsupported, "Expected complete Catch2 3 XML schema 3 report");
     std::set<std::string> actual;
     std::vector<std::string> omittedSuites;
-    std::function<Result<void>(pugi::xml_node, std::string, bool)> visit;
-    visit = [&](pugi::xml_node parent, std::string prefix, bool master) -> Result<void> {
+    std::function<Result<void>(pugi::xml_node, const std::string&, bool)> visit;
+    visit = [&](pugi::xml_node parent, const std::string& prefix, bool master) -> Result<void> {
         for (auto node : parent.children()) {
             const std::string_view tag = node.name();
             if (tag == "TestSuite") {
@@ -397,8 +397,8 @@ Result<TestResult> parseFrameworkRun(FrameworkProfile profile, std::string_view 
         const auto logRoot = logs.child("TestLog");
         if (!logRoot || std::string_view(logRoot.child("BuildInfo").attribute("boost").as_string()) != "1.85.0")
             return fail(ErrorCode::Unsupported, "Expected Boost.Test 1.85.0 XML log with build information");
-        std::function<void(pugi::xml_node, std::string, bool)> merge;
-        merge = [&](pugi::xml_node parent, std::string prefix, bool master) {
+        std::function<void(pugi::xml_node, const std::string&, bool)> merge;
+        merge = [&](pugi::xml_node parent, const std::string& prefix, bool master) {
             for (auto node : parent.children()) {
                 const std::string_view tag = node.name();
                 if (tag == "TestSuite")

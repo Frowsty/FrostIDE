@@ -49,15 +49,15 @@ public:
     // Prepare against an already authenticated selected engine. The caller first starts/waits for
     // an owned RUN-11 editor when required; pairing an external editor never grants host ownership.
     // startPlay uses real play.start after configurationDone ACK. false is ordinary attach.
-    [[nodiscard]] Result<void> prepare(bool startPlay, std::stop_token stop, Prepared completed,
+    [[nodiscard]] Result<void> prepare(bool startPlay, const std::stop_token& stop, Prepared completed,
                                        bool stopOnEntry = true, EngineLuaDebugLifecycle lifecycle = {});
     // Preserves an additional exact native-host/run owner wrapper; never recaptures broader selected authority.
-    [[nodiscard]] Result<void> prepareForOwner(EngineLuaDebugOwner owner, bool startPlay, std::stop_token stop,
+    [[nodiscard]] Result<void> prepareForOwner(EngineLuaDebugOwner owner, bool startPlay, const std::stop_token& stop,
                                                Prepared completed, bool stopOnEntry = true,
                                                EngineLuaDebugLifecycle lifecycle = {});
     // Exact engine-selected scene only. No CLI, synthetic VM or individual runtime case selector.
     [[nodiscard]] Result<void> debugScene(ui::DebugSessionRegistry& sessions, std::string scene, std::uint64_t frames,
-                                          std::stop_token stop = {}, EngineLuaDebugLifecycle lifecycle = {});
+                                          const std::stop_token& stop = {}, EngineLuaDebugLifecycle lifecycle = {});
     [[nodiscard]] Result<void> startAttached(ui::DebugSessionRegistry& sessions, bool startPlay = true);
     // Cancels only this unfinished child, marking local attached preparation cancellation before
     // revoking its token. Busy means actual configuration is complete; do not cancel its owner token.

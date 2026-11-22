@@ -197,7 +197,7 @@ sched::Task<Result<CppIndexUnit>> requestCppIndexUnit(io::IProcessLauncher& laun
     co_return std::move(*unit);
 }
 Result<void> validateCppIndexInputs(io::IFileSystem& fs, const CppIndexUnit& unit,
-                                    std::span<const CppRenameOverlay> overlays, std::stop_token stop) {
+                                    std::span<const CppRenameOverlay> overlays, const std::stop_token& stop) {
     auto decoded = parseCppIndexUnit(unit.data.dump());
     if (!decoded)
         return std::unexpected(decoded.error());

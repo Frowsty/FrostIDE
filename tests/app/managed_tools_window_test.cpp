@@ -15,7 +15,7 @@
 
 namespace frost::app {
 TEST(ManagedToolsWindow, UntrustedNormalActionsNeverLaunchAndDiscoveryHasNoInventedRows) {
-    const auto root =
+    auto root =
         io::kNativePathStyle == io::PathStyle::Windows ? std::string("C:/managed-test") : std::string("/managed-test");
     io::MemFs fs{systemClock()};
     io::ScriptedProcessLauncher launcher;

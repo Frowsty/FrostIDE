@@ -109,7 +109,7 @@ Capabilities mergeCapabilities(Capabilities caps, const rpc::Json& body) {
     mergeFlag(caps.frostSupportsRegisters, source, "frostSupportsRegisters");
     mergeFlag(caps.frostSupportsRawView, source, "frostSupportsRawView");
     if (const auto value = source.boolAt("frostStructuredNatvis"))
-        caps.frostStructuredNatvis = *value;
+        caps.frostStructuredNatvis = value;
 
     if (const rpc::Json* filters = source.find("exceptionBreakpointFilters");
         filters != nullptr && filters->isArray()) {

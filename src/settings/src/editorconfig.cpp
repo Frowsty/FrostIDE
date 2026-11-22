@@ -15,6 +15,7 @@
 #include <format>
 #include <map>
 #include <optional>
+#include <ranges>
 #include <system_error>
 
 namespace frost::settings {
@@ -327,13 +328,13 @@ Result<EditorConfigProperties> resolveEditorConfig(io::IFileSystem& fs, std::str
 
     std::map<std::string, std::string, std::less<>> merged;
     EditorConfigProperties result;
-    for (auto it = found.rbegin(); it != found.rend(); ++it) {
-        std::string relative = normalized->substr(it->directory.size());
+    for (const auto& entry : std::views::reverse(found)) {
+        std::string relative = normalized->substr(entry.directory.size());
         std::ranges::replace(relative, '\\', '/');
         while (relative.starts_with('/')) {
             relative.erase(0, 1);
         }
-        for (const EditorConfigFile::Section& section : it->file.sections) {
+        for (const EditorConfigFile::Section& section : entry.file.sections) {
             if (!editorConfigGlobMatches(section.glob, relative)) {
                 continue;
             }
@@ -345,7 +346,7 @@ Result<EditorConfigProperties> resolveEditorConfig(io::IFileSystem& fs, std::str
                 }
             }
         }
-        result.files.push_back(it->path);
+        result.files.push_back(entry.path);
     }
     result.properties.assign(merged.begin(), merged.end());
     return result;

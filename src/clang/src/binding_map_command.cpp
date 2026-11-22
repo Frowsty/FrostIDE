@@ -103,14 +103,14 @@ BindingCompileContext bindingSourceCompileContext(const clang::tooling::CompileC
             }
             result.sourceParse.CommandLine.push_back(value);
         }
-        result.normalizations.push_back("msvc-yu-fp-transport-to-existing-first-fi-source");
+        result.normalizations.emplace_back("msvc-yu-fp-transport-to-existing-first-fi-source");
     }
     if (!forced.empty() && !unknownForced) {
         // Pinned LLVM's driver documents -ignore-pch: source headers stay explicitly included,
         // but no implicit neighboring GCC/Clang cache is consumed. /clang: forwards it in CL mode.
-        result.sourceParse.CommandLine.push_back(cl ? "/clang:-ignore-pch" : "-ignore-pch");
+        result.sourceParse.CommandLine.emplace_back(cl ? "/clang:-ignore-pch" : "-ignore-pch");
         result.textualHeaders = std::move(forced);
-        result.normalizations.push_back("textual-forced-include-disable-implicit-pch");
+        result.normalizations.emplace_back("textual-forced-include-disable-implicit-pch");
     }
     return result;
 }

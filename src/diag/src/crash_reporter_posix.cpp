@@ -24,7 +24,6 @@
 #include <thread>
 #include <utility>
 
-#include <signal.h>
 #include <unistd.h>
 #include <unwind.h>
 

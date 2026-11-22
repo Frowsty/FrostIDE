@@ -16,6 +16,7 @@
 #include <chrono>
 #include <filesystem>
 #include <optional>
+#include <ranges>
 #include <set>
 #include <string>
 #include <string_view>
@@ -147,8 +148,8 @@ protected:
             EXPECT_EQ(bytes.substr(offset, length), edit.stringAt("expectedText"));
             previousEnd = offset + length;
         }
-        for (auto it = edits->items().rbegin(); it != edits->items().rend(); ++it) {
-            bytes.replace(*it->unsignedAt("offset"), *it->unsignedAt("length"), it->stringAt("replacement"));
+        for (const auto& edit : std::views::reverse(edits->items())) {
+            bytes.replace(*edit.unsignedAt("offset"), *edit.unsignedAt("length"), edit.stringAt("replacement"));
         }
         return bytes;
     }

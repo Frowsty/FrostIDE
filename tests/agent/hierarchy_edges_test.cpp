@@ -26,7 +26,7 @@ TEST(AgentHierarchy, TypeQueriesBothEdgeDirectionsAndRetainsPrivateProviderHandl
     std::optional<frost::Result<Json>> result;
     frost::agent::hierarchyEdges(
         true, Json::object(),
-        [&](std::string method, Json params, frost::agent::IdeQueryDone done) {
+        [&](const std::string& method, Json params, const frost::agent::IdeQueryDone& done) {
             calls.push_back(method);
             if (method == "textDocument/prepareTypeHierarchy") {
                 done(Json::array().push(item("Root")));
@@ -52,7 +52,7 @@ TEST(AgentHierarchy, CallEdgesKeepActualRangesAndExcludeEscapingCallers) {
     std::optional<frost::Result<Json>> result;
     frost::agent::hierarchyEdges(
         false, Json::object(),
-        [](std::string method, Json, frost::agent::IdeQueryDone done) {
+        [](const std::string& method, const Json&, const frost::agent::IdeQueryDone& done) {
             if (method == "textDocument/prepareCallHierarchy") {
                 done(Json::array().push(item("callee")));
                 return;
@@ -81,7 +81,7 @@ TEST(AgentHierarchy, NestedProviderLocationsStayWithinWorkspace) {
     std::optional<frost::Result<Json>> result;
     frost::agent::hierarchyEdges(
         false, Json::object(),
-        [](std::string method, Json, frost::agent::IdeQueryDone done) {
+        [](const std::string& method, const Json&, const frost::agent::IdeQueryDone& done) {
             const auto metadata =
                 Json::object()
                     .set("outsideLocation",
@@ -114,7 +114,7 @@ TEST(AgentHierarchy, ProviderErrorsDoNotBecomeEmptyOrInventedEdges) {
     std::optional<frost::Result<Json>> result;
     frost::agent::hierarchyEdges(
         true, Json::object(),
-        [](std::string method, Json, frost::agent::IdeQueryDone done) {
+        [](const std::string& method, const Json&, const frost::agent::IdeQueryDone& done) {
             if (method == "textDocument/prepareTypeHierarchy")
                 done(Json::array().push(item("Root")));
             else
@@ -130,7 +130,7 @@ TEST(AgentHierarchy, EdgeCapsFailExplicitlyAndOrdinaryLargeSetsRemainPageable) {
         std::optional<frost::Result<Json>> result;
         frost::agent::hierarchyEdges(
             true, Json::object(),
-            [count](std::string method, Json, frost::agent::IdeQueryDone done) {
+            [count](const std::string& method, const Json&, const frost::agent::IdeQueryDone& done) {
                 if (method == "textDocument/prepareTypeHierarchy") {
                     done(Json::array().push(item("Root")));
                     return;
@@ -158,7 +158,7 @@ TEST(AgentHierarchy, EscapingRootIsNeverUsedInAnotherProviderRequest) {
     std::optional<frost::Result<Json>> result;
     frost::agent::hierarchyEdges(
         false, Json::object(),
-        [&](std::string, Json, frost::agent::IdeQueryDone done) {
+        [&](const std::string&, const Json&, const frost::agent::IdeQueryDone& done) {
             ++requests;
             done(Json::array().push(item("Outside", "file:///outside/source.cpp")));
         },
@@ -174,7 +174,7 @@ TEST(AgentHierarchy, RevocationBetweenProviderRepliesPreventsFurtherExpansion) {
     std::optional<frost::Result<Json>> result;
     frost::agent::hierarchyEdges(
         true, Json::object(),
-        [&](std::string method, Json, frost::agent::IdeQueryDone done) {
+        [&](const std::string& method, const Json&, const frost::agent::IdeQueryDone& done) {
             ++requests;
             if (method == "textDocument/prepareTypeHierarchy")
                 done(Json::array().push(item("Root")));

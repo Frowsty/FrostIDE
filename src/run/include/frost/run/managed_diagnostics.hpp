@@ -32,5 +32,5 @@ struct ManagedDiagnosticReport {
 [[nodiscard]] Result<ManagedDiagnosticReport> collectManagedDiagnostics(io::IFileSystem& fs,
                                                                         io::IProcessLauncher& launcher,
                                                                         const ManagedDiagnosticRequest& request,
-                                                                        std::stop_token stop = {});
+                                                                        const std::stop_token& stop = {});
 } // namespace frost::run

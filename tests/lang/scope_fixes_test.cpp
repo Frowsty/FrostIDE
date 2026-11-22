@@ -17,7 +17,7 @@ std::string path() {
 }
 Json fix(std::string title, unsigned start, unsigned end, std::string replacement, bool preferred = false) {
     return Json::object()
-        .set("title", title)
+        .set("title", std::move(title))
         .set("kind", "quickfix")
         .set("isPreferred", preferred)
         .set("edit", Json::object().set(
@@ -25,7 +25,7 @@ Json fix(std::string title, unsigned start, unsigned end, std::string replacemen
                                         fl::pathToUri(path()).value(),
                                         Json::array({Json::object()
                                                          .set("range", fl::toJson(fl::LspRange{{0, start}, {0, end}}))
-                                                         .set("newText", replacement)}))));
+                                                         .set("newText", std::move(replacement))}))));
 }
 fl::FileDiagnostics diagnostics() {
     fl::LiveDiagnostic first, second;

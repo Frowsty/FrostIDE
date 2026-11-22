@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <map>
+#include <ranges>
 #include <utility>
 #include <vector>
 
@@ -744,8 +745,8 @@ Result<std::vector<CMakeMembershipPlan>> planCMakeSourceRenameAllTargets(const C
             if (definition.changes[i].begin < definition.changes[i - 1].end)
                 return fail(ErrorCode::InvalidArgument, "Target memberships propose overlapping definition edits");
         CMakeMembershipPlan plan{path, definition.original, definition.original};
-        for (auto it = definition.changes.rbegin(); it != definition.changes.rend(); ++it)
-            plan.replacement.replace(it->begin, it->end - it->begin, it->replacement);
+        for (const auto& change : std::views::reverse(definition.changes))
+            plan.replacement.replace(change.begin, change.end - change.begin, change.replacement);
         result.push_back(std::move(plan));
     }
     return result;

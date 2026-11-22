@@ -486,7 +486,7 @@ sched::Task<Result<UnityUsagesOutcome>> unityUsagesTask(fl::ILspRequester& serve
                                                      kind == "asset" ? std::string_view{} : name, kind);
                 }
             } else if (!semantics)
-                outcome.diagnostics.push_back(
+                outcome.diagnostics.emplace_back(
                     "Unity source-symbol asset usages require the owned Roslyn semantic provider");
         }
     } else
@@ -499,7 +499,7 @@ sched::Task<Result<UnityUsagesOutcome>> unityUsagesTask(fl::ILspRequester& serve
         else if (!unity.recognized)
             co_return std::unexpected(ordinary.error());
         else
-            outcome.diagnostics.push_back(
+            outcome.diagnostics.emplace_back(
                 "C# symbol usages unavailable; showing serialized asset GUID references only");
     }
     for (auto& group : unity.usages)

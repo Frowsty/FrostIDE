@@ -37,7 +37,7 @@ struct InspectionScopeFixProposal {
 // Relative compiler working directories and unexpanded response/PCH/module inputs refuse.
 // Linked trees, unreadable inputs, budget overflow and missing translation units explicitly refuse.
 [[nodiscard]] Result<InspectionScopeCapture>
-captureInspectionScope(io::IFileSystem& fs, const InspectionRequest& request, std::string projectRoot,
+captureInspectionScope(io::IFileSystem& fs, const InspectionRequest& request, const std::string& projectRoot,
                        std::span<const std::pair<std::string, std::string>> openBuffers);
 [[nodiscard]] Result<void> validateInspectionCapture(io::IFileSystem& fs, const InspectionScopeCapture& capture);
 // Decodes ONLY the frost-clang LLVM YAML DTO. Notes with replacements are alternative fix groups;
@@ -49,5 +49,5 @@ planInspectionScopeFixes(const Json& decoded, const InspectionScopeCapture& capt
 // clang-tidy -export-fixes YAML is decoded by the pinned helper. Processes are joined before return.
 [[nodiscard]] Result<InspectionScopeFixProposal>
 runInspectionScopeFixes(io::IProcessLauncher& launcher, io::IFileSystem& fs, InspectionRequest request,
-                        const InspectionScopeCapture& capture, std::string helper, std::string scratchDirectory);
+                        const InspectionScopeCapture& capture, std::string helper, const std::string& scratchDirectory);
 } // namespace frost::lang

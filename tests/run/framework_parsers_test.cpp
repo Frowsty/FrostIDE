@@ -13,7 +13,7 @@ std::string catchReport(std::string_view cases, std::string_view counts) {
     return "<Catch2TestRun catch2-version=\"3.7.1\" xml-format-version=\"3\">" + std::string(cases) +
            "<OverallResultsCases " + std::string(counts) + "/></Catch2TestRun>";
 }
-const std::string boostLog =
+constexpr std::string_view boostLog =
     "<TestLog><BuildInfo boost=\"1.85.0\"/><TestSuite name=\"module\"><TestCase name=\"passes\" file=\"real.cpp\" "
     "line=\"8\"><TestingTime>17</TestingTime></TestCase></TestSuite></TestLog>";
 TEST(FrameworkProtocol, CatchListingUsesActualNameAndLocationWithoutOutcomes) {

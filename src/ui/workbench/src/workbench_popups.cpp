@@ -14,15 +14,16 @@
 #include <QTimer>
 
 #include <iterator>
+#include <ranges>
 #include <set>
 #include <span>
 
 namespace frost::ui {
 namespace {
 using IndexedFiles = std::vector<std::pair<std::string, std::string>>;
-Result<IndexedFiles> indexedFileCandidates(std::shared_ptr<const nav::ProjectFiles> snapshot,
+Result<IndexedFiles> indexedFileCandidates(const std::shared_ptr<const nav::ProjectFiles>& snapshot,
                                            std::span<const std::string> recents, const std::string& root,
-                                           const std::string& pattern, std::size_t limit, std::stop_token stop) {
+                                           const std::string& pattern, std::size_t limit, const std::stop_token& stop) {
     if (stop.stop_requested())
         return fail(ErrorCode::Cancelled, "File search cancelled");
     IndexedFiles candidates;
@@ -64,7 +65,7 @@ sched::Task<Result<IndexedFiles>> indexedFiles(sched::IScheduler& scheduler,
                                                std::vector<std::string> recents, std::string root, std::string pattern,
                                                std::size_t limit, std::stop_token stop) {
     co_await scheduler.schedule(sched::Lane::Interactive);
-    co_return indexedFileCandidates(std::move(snapshot), recents, root, pattern, limit, stop);
+    co_return indexedFileCandidates(snapshot, recents, root, pattern, limit, stop);
 }
 struct FilePopupQuery {
     std::stop_source stop;
@@ -827,9 +828,9 @@ bool Workbench::goToPreviousBookmark() {
         return false;
     }
     const nav::Place cur = currentPlace();
-    for (auto it = all.rbegin(); it != all.rend(); ++it) {
-        if (it->path < cur.path || (it->path == cur.path && it->line < cur.line)) {
-            return openFile(it->path, LinePosition{it->line, it->column}).has_value();
+    for (const nav::Place& bm : std::views::reverse(all)) {
+        if (bm.path < cur.path || (bm.path == cur.path && bm.line < cur.line)) {
+            return openFile(bm.path, LinePosition{bm.line, bm.column}).has_value();
         }
     }
     return openFile(all.back().path, LinePosition{all.back().line, all.back().column}).has_value();

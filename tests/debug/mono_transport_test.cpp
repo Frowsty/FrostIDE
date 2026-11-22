@@ -35,14 +35,18 @@ void closeSocket(Socket s) { ::close(s); }
 #endif
 class Listener {
 public:
-    Listener() {
+    Listener()
+#ifndef _WIN32
+        : m_socket(socket(AF_INET, SOCK_STREAM, IPPROTO_TCP))
+#endif
+    {
 #ifdef _WIN32
         WSADATA data{};
         if (WSAStartup(MAKEWORD(2, 2), &data) != 0)
             return;
         m_winsock = true;
-#endif
         m_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+#endif
         if (m_socket == invalid)
             return;
         sockaddr_in address{};
@@ -413,7 +417,7 @@ TEST(MonoTransport, LinuxHeldProcessOwnsActualReverseSocketAndRevocationRefusesI
         closeSocket(accepted);
     });
     auto stream = BinaryLoopback::connect(listener.port, std::chrono::steady_clock::now() + 3s, {},
-                                          [peer = *peer](auto local, auto remote, auto until, auto stop) {
+                                          [peer = *peer](auto local, auto remote, auto until, const auto& stop) {
                                               return peer->verify(local, remote, until, stop);
                                           });
     ASSERT_TRUE(stream);

@@ -101,22 +101,23 @@ Result<Json> runAdmittedCommand(const Json& discoveryDoc, std::string_view proje
                                 Json params, const std::function<bool(std::string_view, std::string_view)>& sameProject,
                                 const std::function<bool()>& stillTrusted, const EngineConnect& connect,
                                 std::chrono::steady_clock::time_point expires, std::stop_token stop = {}) {
-    return runEngineCommand(
-        discoveryDoc, projectRoot, method, std::move(params), sameProject, stillTrusted, connect, expires, stop,
-        [](std::string_view name, const Json&, const Json& schema, const Json& server,
-           const Json& project) -> Result<void> {
-            EXPECT_EQ(server.integerAt("contractVersion"), 1);
-            EXPECT_EQ(project.stringAt("directory"), kRoot);
-            const auto* commands = schema.find("commands");
-            if (commands && commands->isArray()) {
-                for (const Json& command : commands->items()) {
-                    const Json* policy = command.find("idePolicy");
-                    if (command.stringAt("name") == name && policy && policy->boolAt("allowed") == true)
-                        return {};
-                }
-            }
-            return fail(ErrorCode::PermissionDenied, "command has no schema opt-in");
-        });
+    return runEngineCommand(discoveryDoc, projectRoot, method, std::move(params), sameProject, stillTrusted, connect,
+                            expires, std::move(stop),
+                            [](std::string_view name, const Json&, const Json& schema, const Json& server,
+                               const Json& project) -> Result<void> {
+                                EXPECT_EQ(server.integerAt("contractVersion"), 1);
+                                EXPECT_EQ(project.stringAt("directory"), kRoot);
+                                const auto* commands = schema.find("commands");
+                                if (commands && commands->isArray()) {
+                                    for (const Json& command : commands->items()) {
+                                        const Json* policy = command.find("idePolicy");
+                                        if (command.stringAt("name") == name && policy &&
+                                            policy->boolAt("allowed") == true)
+                                            return {};
+                                    }
+                                }
+                                return fail(ErrorCode::PermissionDenied, "command has no schema opt-in");
+                            });
 }
 
 TEST(EngineAutomation, MissingPolicyNeverConnects) {

@@ -14,8 +14,8 @@
 
 #include <windows.h>
 #else
-#include <locale.h>
-#include <string.h>
+#include <clocale>
+#include <cstring>
 #endif
 
 namespace frost::io {

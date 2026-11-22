@@ -685,7 +685,7 @@ TEST(RealProcessLauncher, CancellationTerminatesARealContainedChildBeforeItsDead
     ASSERT_TRUE(spec.killOnClose);
     std::optional<frost::Result<ProcessResult>> outcome;
     std::jthread worker(
-        [&](std::stop_token stop) { outcome = frost::io::runToCompletion(launcher, spec, {}, 30s, stop); });
+        [&](std::stop_token stop) { outcome = frost::io::runToCompletion(launcher, spec, {}, 30s, std::move(stop)); });
     // The child itself writes this marker, proving it has started. A failed assertion still
     // requests stop through jthread destruction before joining, so this test owns its cleanup.
     const auto readyDeadline = std::chrono::steady_clock::now() + 10s;

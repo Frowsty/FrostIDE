@@ -774,11 +774,13 @@ public:
         auto wideBackup = toWin32Path(backupPath);
         if (!wideBackup)
             return abandon(std::move(wideBackup.error()));
-        const BOOL replaced =
-            useBackup ? ReplaceFileW(wideTarget->c_str(), wideTemp.c_str(), wideBackup->c_str(), 0, nullptr, nullptr)
-                      : MoveFileExW(wideTemp.c_str(), wideTarget->c_str(),
-                                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
-        if (replaced == FALSE) {
+        for (int attempt = 0;; ++attempt) {
+            const BOOL replaced = useBackup ? ReplaceFileW(wideTarget->c_str(), wideTemp.c_str(), wideBackup->c_str(),
+                                                           0, nullptr, nullptr)
+                                            : MoveFileExW(wideTemp.c_str(), wideTarget->c_str(),
+                                                          MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+            if (replaced != FALSE)
+                break;
             const DWORD error = GetLastError();
             if (useBackup) {
                 if (auto recovery = detail::timestampedReplaceRecovery(error, *target, temp->path, backupPath))
@@ -786,6 +788,17 @@ public:
             }
             if (error == ERROR_ACCESS_DENIED && isDirectory(*wideTarget))
                 return abandon(detail::isADirectoryError("writeFileAtomic", path));
+            const DWORD attrs = attributesOf(*wideTarget);
+            const bool transientAccessDenied = !useBackup && error == ERROR_ACCESS_DENIED &&
+                                               attrs != INVALID_FILE_ATTRIBUTES &&
+                                               (attrs & FILE_ATTRIBUTE_READONLY) == 0;
+            const bool transientBusy = error == ERROR_SHARING_VIOLATION || error == ERROR_LOCK_VIOLATION ||
+                                       error == ERROR_USER_MAPPED_FILE ||
+                                       (useBackup && error == ERROR_UNABLE_TO_REMOVE_REPLACED) || transientAccessDenied;
+            if (transientBusy && attempt < kBusyRetries) {
+                Sleep(kBusyRetryMs);
+                continue;
+            }
             return abandon(win32Error(error, "writeFileAtomic: replace", path));
         }
         if (useBackup && DeleteFileW(wideBackup->c_str()) == FALSE)

@@ -12,18 +12,21 @@ class Escapes final : public clang::RecursiveASTVisitor<Escapes> {
 public:
     std::set<const clang::VarDecl*>& excluded;
     explicit Escapes(std::set<const clang::VarDecl*>& e) : excluded(e) {}
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitUnaryOperator(clang::UnaryOperator* e) {
         if (e->getOpcode() == clang::UO_AddrOf)
             if (auto* v = local(e->getSubExpr()))
                 excluded.insert(v);
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitVarDecl(clang::VarDecl* d) {
         if (d->getType()->isLValueReferenceType() && !d->getType()->getPointeeType().isConstQualified())
             if (auto* v = local(d->getInit()))
                 excluded.insert(v);
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitCXXConstructExpr(clang::CXXConstructExpr* construction) {
         const auto* constructor = construction->getConstructor();
         for (unsigned i = 0; i < constructor->getNumParams() && i < construction->getNumArgs(); ++i) {
@@ -34,6 +37,7 @@ public:
         }
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitLambdaExpr(clang::LambdaExpr* lambda) {
         for (const auto& capture : lambda->captures()) {
             if (!capture.capturesVariable() || capture.getCaptureKind() != clang::LCK_ByRef)
@@ -44,6 +48,7 @@ public:
         return true;
     }
 
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitCallExpr(clang::CallExpr* call) {
         const auto* function = call->getDirectCallee();
         if (!function)
@@ -86,6 +91,7 @@ class Transfer final : public clang::RecursiveASTVisitor<Transfer> {
 
 public:
     Transfer(FunctionFlow& f, State& s, const clang::Stmt* r, bool e) : flow(f), state(s), root(r), emit(e) {}
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool shouldTraversePostOrder() const { return true; }
     bool TraverseStmt(clang::Stmt* statement) {
         if (!statement || (statement != root && flow.roots.contains(statement)))
@@ -170,6 +176,7 @@ public:
         if (pointer(operand) == Null::Null)
             warn("frost-null-dereference", e, "This local pointer is null on every incoming live CFG path.");
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitUnaryOperator(clang::UnaryOperator* e) {
         if (e->getOpcode() == clang::UO_Deref)
             dereference(e->getSubExpr(), *e);
@@ -178,21 +185,25 @@ public:
                 state[v] = Fact{};
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitMemberExpr(clang::MemberExpr* e) {
         if (e->isArrow())
             dereference(e->getBase(), *e);
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitArraySubscriptExpr(clang::ArraySubscriptExpr* e) {
         dereference(e->getBase(), *e);
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitDeclStmt(clang::DeclStmt* e) {
         for (const auto* d : e->decls())
             if (const auto* v = llvm::dyn_cast<clang::VarDecl>(d); v && !flow.excluded.contains(v->getCanonicalDecl()))
                 state[v->getCanonicalDecl()] = value(v->getInit());
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitBinaryOperator(clang::BinaryOperator* e) {
         if (e->getOpcode() == clang::BO_Assign) {
             if (const auto* v = flow.variable(e->getLHS()))
@@ -223,6 +234,7 @@ public:
         }
         return false;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitDeclRefExpr(clang::DeclRefExpr* e) {
         if (const auto* v = flow.variable(e);
             v && !writeOnly.contains(v) && !safeMemberUse(e) && state[v].moved == Moved::Moved)
@@ -242,11 +254,13 @@ public:
         if (const auto* v = flow.variable(source))
             state[v].moved = Moved::Moved;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitCXXConstructExpr(clang::CXXConstructExpr* e) {
         if (e->getConstructor()->isMoveConstructor() && !e->getConstructor()->isTrivial() && e->getNumArgs())
             consumed(e->getArg(0));
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitCXXOperatorCallExpr(clang::CXXOperatorCallExpr* e) {
         const auto* method = llvm::dyn_cast_or_null<clang::CXXMethodDecl>(e->getDirectCallee());
         if (e->getOperator() == clang::OO_Equal && e->getNumArgs() > 1) {
@@ -266,6 +280,7 @@ public:
                 warn("frost-empty-optional", *e, "This std::optional is empty on every incoming live CFG path.");
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitCXXMemberCallExpr(clang::CXXMemberCallExpr* call) {
         const auto* method = call->getMethodDecl();
         const auto* v = flow.variable(call->getImplicitObjectArgument());
@@ -286,6 +301,7 @@ public:
             state[v].moved = Moved::Available;
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitCXXDeleteExpr(clang::CXXDeleteExpr* e) {
         if (const auto* v = flow.variable(e->getArgument())) {
             const auto allocation = state[v].allocation;

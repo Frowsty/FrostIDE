@@ -112,8 +112,11 @@ int run(const fs::path& exe, const fs::path& project) {
     const auto title = project.filename().wstring() + L" - FrostIDE";
     HWND window = nullptr;
     while (qpcNow() < deadline && !process->wait(0)) {
-        if (projectCommitted(index, project) && (window = projectWindow(process->pid(), title)))
-            break;
+        if (projectCommitted(index, project)) {
+            window = projectWindow(process->pid(), title);
+            if (window)
+                break;
+        }
         Sleep(20);
     }
     if (!window)

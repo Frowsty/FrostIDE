@@ -114,14 +114,14 @@ void LanguageBridge::invalidateJsonValidation() {
     std::erase_if(m_validationDocuments, [&](const auto& pair) { return isJsonValidation(pair.second); });
 }
 
-Result<void> LanguageBridge::installEngineDocumentSchemas(std::string root, const lang::Json& schemas) {
-    auto installed = m_json->installEngineSchemas(std::move(root), schemas);
+Result<void> LanguageBridge::installEngineDocumentSchemas(const std::string& root, const lang::Json& schemas) {
+    auto installed = m_json->installEngineSchemas(root, schemas);
     if (installed)
         invalidateJsonValidation();
     return installed;
 }
 
-Result<void> LanguageBridge::installEngineTableSchema(std::string path, const text::Snapshot& snapshot,
+Result<void> LanguageBridge::installEngineTableSchema(const std::string& path, const text::Snapshot& snapshot,
                                                       const lang::Json& reply) {
     auto installed = m_json->installEngineTableSchema(path, snapshot, reply);
     if (installed)

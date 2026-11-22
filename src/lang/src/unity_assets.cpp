@@ -71,7 +71,7 @@ void UnityAssetIndex::reset(std::span<const UnityAssetSnapshot> snapshots) {
     for (const auto& snapshot : snapshots) {
         if (++files > 4096 || snapshot.contents.size() > 16 * 1024 * 1024 ||
             snapshot.contents.size() > 64 * 1024 * 1024 - total) {
-            m_diagnostics.push_back("Unity asset index incomplete: snapshot budget exceeded");
+            m_diagnostics.emplace_back("Unity asset index incomplete: snapshot budget exceeded");
             break;
         }
         total += snapshot.contents.size();
@@ -420,7 +420,7 @@ std::vector<UnityAssetUsage> memberUsages(std::span<const UnityAssetSnapshot> sn
 }
 UnityAssetQuery queryUnityAssets(io::IFileSystem& fs, std::span<const std::string> projectFiles,
                                  std::span<const UnityAssetSnapshot> overlays, std::string_view path,
-                                 std::size_t byteOffset, std::stop_token stop, std::string_view memberName,
+                                 std::size_t byteOffset, const std::stop_token& stop, std::string_view memberName,
                                  std::string_view memberKind) {
     UnityAssetQuery result;
     if (projectFiles.empty() || (!yamlAsset(path) && !path.ends_with(".cs") && !path.ends_with(".meta")))
@@ -434,7 +434,7 @@ UnityAssetQuery queryUnityAssets(io::IFileSystem& fs, std::span<const std::strin
     };
     for (const auto& file : projectFiles) {
         if (candidates.size() >= 8192) {
-            result.diagnostics.push_back("Unity asset inventory exceeds limit; index incomplete");
+            result.diagnostics.emplace_back("Unity asset inventory exceeds limit; index incomplete");
             break;
         }
         include(file);
@@ -446,7 +446,7 @@ UnityAssetQuery queryUnityAssets(io::IFileSystem& fs, std::span<const std::strin
         if (stop.stop_requested())
             return {};
         if (snapshots.size() >= 4096 || total >= 64 * 1024 * 1024) {
-            result.diagnostics.push_back("Unity asset index incomplete: snapshot budget exceeded");
+            result.diagnostics.emplace_back("Unity asset index incomplete: snapshot budget exceeded");
             break;
         }
         const auto open = std::ranges::find_if(

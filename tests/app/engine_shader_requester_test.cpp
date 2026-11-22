@@ -19,11 +19,12 @@ TEST(EngineShaderRequester, OneDispatcherCanRunDelayedReplyAndReleaseLease) {
     Requester::Reply reply;
     frost::sched::SimExecutor scheduler;
     auto resources = governor();
-    Requester requester(scheduler, resources,
-                        [&](std::string method, frost::lang::Json, std::stop_token, Requester::Reply callback) {
-                            EXPECT_EQ(method, "completion");
-                            reply = std::move(callback);
-                        });
+    Requester requester(
+        scheduler, resources,
+        [&](const std::string& method, const frost::lang::Json&, const std::stop_token&, Requester::Reply callback) {
+            EXPECT_EQ(method, "completion");
+            reply = std::move(callback);
+        });
     auto request = scheduler.spawn(frost::sched::Lane::Background,
                                    requester.request("textDocument/completion", frost::lang::Json::object()));
     for (int i = 0; i < 16 && !reply; ++i)
@@ -45,11 +46,12 @@ TEST(EngineShaderRequester, CancellationStopsActualDispatchTokenAndLateReplyDoes
     frost::sched::SimExecutor scheduler;
     auto resources = governor();
     std::stop_source stop;
-    Requester requester(scheduler, resources,
-                        [&](std::string, frost::lang::Json, std::stop_token token, Requester::Reply callback) {
-                            dispatched = token;
-                            reply = std::move(callback);
-                        });
+    Requester requester(
+        scheduler, resources,
+        [&](const std::string&, const frost::lang::Json&, std::stop_token token, Requester::Reply callback) {
+            dispatched = std::move(token);
+            reply = std::move(callback);
+        });
     auto request =
         scheduler.spawn(frost::sched::Lane::Background,
                         requester.request("textDocument/completion", frost::lang::Json::object(), stop.get_token()));
@@ -71,11 +73,12 @@ TEST(EngineShaderRequester, DeadlineRemainsTimeoutAndLateReplyCannotReplaceIt) {
     Requester::Reply reply;
     std::stop_token dispatched;
     frost::sched::SimExecutor scheduler;
-    Requester requester(scheduler, governor(),
-                        [&](std::string, frost::lang::Json, std::stop_token token, Requester::Reply callback) {
-                            dispatched = token;
-                            reply = std::move(callback);
-                        });
+    Requester requester(
+        scheduler, governor(),
+        [&](const std::string&, const frost::lang::Json&, std::stop_token token, Requester::Reply callback) {
+            dispatched = std::move(token);
+            reply = std::move(callback);
+        });
     auto request = scheduler.spawn(frost::sched::Lane::Background,
                                    requester.request("textDocument/completion", frost::lang::Json::object()));
     scheduler.runUntilIdle();

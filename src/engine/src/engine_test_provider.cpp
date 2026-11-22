@@ -18,7 +18,7 @@ bool beneath(std::string_view path, std::string_view root) {
     return lang::documentKey(path).starts_with(prefix);
 }
 Result<std::string> checkpoint(io::IFileSystem& fs, const EngineTestProviderOptions& o,
-                               const std::function<bool()>& admitted, std::stop_token stop) {
+                               const std::function<bool()>& admitted, const std::stop_token& stop) {
     if (stop.stop_requested())
         return fail(ErrorCode::Cancelled, "engine tests cancelled");
     if (!admitted || !admitted())
@@ -76,7 +76,7 @@ struct AdmittedCommandResult {
 };
 Result<AdmittedCommandResult> command(io::IFileSystem& fs, io::IProcessLauncher& launcher,
                                       const EngineTestProviderOptions& o, const std::function<bool()>& admitted,
-                                      std::stop_token stop, std::string name, rpc::Json params, bool run,
+                                      const std::stop_token& stop, std::string name, rpc::Json params, bool run,
                                       std::string_view expectedTarget = {}) {
     auto target = checkpoint(fs, o, admitted, stop);
     if (!target)
@@ -138,7 +138,7 @@ Result<void> listingIdentity(io::IFileSystem& fs, const EngineTestProviderOption
 } // namespace
 Result<EngineTestListing> discoverEngineSceneTests(io::IFileSystem& fs, io::IProcessLauncher& launcher,
                                                    const EngineTestProviderOptions& o,
-                                                   const std::function<bool()>& admitted, std::stop_token stop) {
+                                                   const std::function<bool()>& admitted, const std::stop_token& stop) {
     auto result =
         command(fs, launcher, o, admitted, stop, "test.list", rpc::Json::object().set("folder", o.folder), false);
     if (!result)
@@ -154,7 +154,7 @@ Result<EngineTestListing> discoverEngineSceneTests(io::IFileSystem& fs, io::IPro
 EngineTestExecution runEngineSceneTests(io::IFileSystem& fs, io::IProcessLauncher& launcher,
                                         const EngineTestProviderOptions& o, const EngineTestListing& listing,
                                         std::span<const std::string> ids, const std::function<bool()>& admitted,
-                                        std::stop_token stop) {
+                                        const std::stop_token& stop) {
     EngineTestExecution out;
     const auto refuse = [&](Error error) {
         out.cancelled = error.code() == ErrorCode::Cancelled;

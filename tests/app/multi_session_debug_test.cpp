@@ -51,7 +51,7 @@ TEST(CompoundDebugCoordinator, PreparesEveryMemberBeforeLaunchAndCancelsRevokedW
     }
     auto group = coordinator.start(
         configs, [&] { return admitted; },
-        [&](const run::RunConfiguration&, std::stop_token,
+        [&](const run::RunConfiguration&, const std::stop_token&,
             MultiSessionDebugCoordinator::Prepared done) -> Result<void> {
             waiting.push_back(std::move(done));
             return {};
@@ -92,7 +92,7 @@ TEST(CompoundDebugCoordinator, StopAllCancelsPendingPreparationAndLateCompletion
         {member}, [] { return true; },
         [&](const run::RunConfiguration&, std::stop_token token,
             MultiSessionDebugCoordinator::Prepared done) -> Result<void> {
-            stop = token;
+            stop = std::move(token);
             completed = std::move(done);
             return {};
         });
@@ -149,7 +149,7 @@ protected:
         PreparedDebugLaunch prepared;
         prepared.startPhased = [this](ui::DebugSessionRegistry&, ui::DebugGroupId group, std::stop_token token,
                                       PreparedDebugLaunch::Started done) -> Result<void> {
-            phaseStop = token;
+            phaseStop = std::move(token);
             completion = std::move(done);
             auto started = child(group, "Partial native host");
             if (!started)
@@ -160,7 +160,7 @@ protected:
         return prepared;
     }
     MultiSessionDebugCoordinator::Prepare prepare(bool holdAll = false) {
-        return [this, holdAll](const run::RunConfiguration& member, std::stop_token,
+        return [this, holdAll](const run::RunConfiguration& member, const std::stop_token&,
                                MultiSessionDebugCoordinator::Prepared done) -> Result<void> {
             if (holdAll) {
                 preparation.push_back(std::move(done));

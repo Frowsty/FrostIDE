@@ -22,7 +22,7 @@ using namespace std::chrono_literals;
 TEST(CMakeMembershipOracle, RenamedLiteralReconfiguresBuildsAndFixtureInverseRestoresBytes) {
     test::ScratchDir scratch("cmake-membership-rename");
     auto& fs = io::realFileSystem();
-    const auto root = scratch.path();
+    const auto& root = scratch.path();
     ASSERT_FALSE(root.empty());
     auto child = [&](std::string_view name) { return *io::joinPath(root, name); };
     const auto build = child("build");
@@ -44,8 +44,8 @@ TEST(CMakeMembershipOracle, RenamedLiteralReconfiguresBuildsAndFixtureInverseRes
         return io::runToCompletion(io::realProcessLauncher(), spec, {}, 5min);
     };
     auto configure = [&] {
-        return run({"-S", root, "-B", build, "-G", "Ninja", "-DCMAKE_MAKE_PROGRAM=" FROST_TEST_NINJA,
-                    "-DCMAKE_CXX_COMPILER=" FROST_TEST_CXX_COMPILER, "-DCMAKE_BUILD_TYPE=Debug"});
+        return run({"-S", root, "-B", build, "-G", "Ninja", std::string("-DCMAKE_MAKE_PROGRAM=") + FROST_TEST_NINJA,
+                    std::string("-DCMAKE_CXX_COMPILER=") + FROST_TEST_CXX_COMPILER, "-DCMAKE_BUILD_TYPE=Debug"});
     };
     auto configured = configure();
     ASSERT_TRUE(configured) << configured.error().describe();
@@ -109,7 +109,7 @@ TEST(CMakeMembershipOracle, RenamedLiteralReconfiguresBuildsAndFixtureInverseRes
 TEST(CMakeTemplateOracle, RenderedClassAndPostfixTargetBecomeRealConfiguredBuildInputs) {
     test::ScratchDir scratch("cmake-template-oracle");
     auto& fs = io::realFileSystem();
-    const auto root = scratch.path();
+    const auto& root = scratch.path();
     const auto build = scratch.join("build");
     const auto lists = scratch.join("CMakeLists.txt");
     ASSERT_TRUE(fs.writeFileAtomic(lists, "cmake_minimum_required(VERSION 3.20)\nproject(Templates LANGUAGES "
@@ -124,8 +124,8 @@ TEST(CMakeTemplateOracle, RenderedClassAndPostfixTargetBecomeRealConfiguredBuild
         return io::runToCompletion(io::realProcessLauncher(), spec, {}, 5min);
     };
     auto configure = [&] {
-        return run({"-S", root, "-B", build, "-G", "Ninja", "-DCMAKE_MAKE_PROGRAM=" FROST_TEST_NINJA,
-                    "-DCMAKE_CXX_COMPILER=" FROST_TEST_CXX_COMPILER, "-DCMAKE_BUILD_TYPE=Debug"});
+        return run({"-S", root, "-B", build, "-G", "Ninja", std::string("-DCMAKE_MAKE_PROGRAM=") + FROST_TEST_NINJA,
+                    std::string("-DCMAKE_CXX_COMPILER=") + FROST_TEST_CXX_COMPILER, "-DCMAKE_BUILD_TYPE=Debug"});
     };
     auto configured = configure();
     ASSERT_TRUE(configured);

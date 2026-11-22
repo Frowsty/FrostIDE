@@ -12,7 +12,8 @@ namespace frost::app {
 // revoke and regrant happen between GUI ticks; active subprocesses share its stop source.
 inline std::jthread watchManagedTrust(project::TrustStore& trust, std::string root, std::uint64_t revision,
                                       std::stop_source operation) {
-    return std::jthread([&trust, root = std::move(root), revision, operation](std::stop_token end) mutable {
+    return std::jthread([&trust, root = std::move(root), revision,
+                         operation = std::move(operation)](const std::stop_token& end) mutable {
         while (!end.stop_requested() && !operation.stop_requested()) {
             const auto current = trust.snapshot(root);
             if (!current.trusted || current.revision != revision) {

@@ -15,7 +15,7 @@
 namespace frost::syntax {
 namespace {
 constexpr std::size_t kBytes = 4 * 1024 * 1024, kOutput = 8 * 1024 * 1024;
-Result<SyntaxTree> parse(const Language* language, text::Snapshot source, std::stop_token stop) {
+Result<SyntaxTree> parse(const Language* language, const text::Snapshot& source, const std::stop_token& stop) {
     detail::ParserPtr parser(ts_parser_new());
     if (!parser || !ts_parser_set_language(parser.get(), language->grammar))
         return fail(ErrorCode::Unsupported, "Structural search grammar is unavailable");
@@ -76,8 +76,8 @@ bool progress(TSQueryCursorState* state) {
     return p.halted;
 }
 } // namespace
-Result<StructuralResult> structuralSearch(LanguageId id, text::Snapshot source, std::string_view pattern,
-                                          std::optional<std::string_view> replacement, std::stop_token stop) {
+Result<StructuralResult> structuralSearch(LanguageId id, const text::Snapshot& source, std::string_view pattern,
+                                          std::optional<std::string_view> replacement, const std::stop_token& stop) {
     if (stop.stop_requested())
         return fail(ErrorCode::Cancelled, "Structural search cancelled");
     if (source.size().value() > kBytes || pattern.empty() || pattern.size() > 16384 ||

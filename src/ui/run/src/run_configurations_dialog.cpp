@@ -128,12 +128,14 @@ RunConfigurationsDialog::RunConfigurationsDialog(const run::RunConfigurationSet&
                                                  bool canAddNative, QWidget* parent)
     : QDialog(parent), m_set(set), m_configurations(set.all()), m_canAddNative(canAddNative),
       m_add(new QPushButton(tr("Add"), this)), m_copy(new QPushButton(tr("Copy"), this)),
-      m_remove(new QPushButton(tr("Remove"), this)), m_list(new QListWidget(this)), m_name(new QLineEdit(this)),
-      m_type(new QLabel(this)), m_target(new QLabel(this)), m_program(new QLineEdit(this)),
-      m_engineProject(new QLineEdit(this)), m_arguments(new QLineEdit(this)), m_workingDirectory(new QLineEdit(this)),
-      m_environment(new QPlainTextEdit(this)), m_beforeLaunch(new QLabel(this)), m_tasks(new QPlainTextEdit(this)),
-      m_members(new QListWidget(this)), m_process(new QLineEdit(this)), m_note(new QLabel(this)),
-      m_error(new QLabel(this)) {
+      m_remove(new QPushButton(tr("Remove"), this)), m_list(new QListWidget(this)),
+      m_remoteEndpoint(new QLineEdit(this)), m_name(new QLineEdit(this)), m_type(new QLabel(this)),
+      m_target(new QLabel(this)), m_program(new QLineEdit(this)), m_engineProject(new QLineEdit(this)),
+      m_engineDebugMode(new QComboBox(this)), m_luaScript(new QLineEdit(this)),
+      m_interpreterArguments(new QLineEdit(this)), m_luaRuntime(new QComboBox(this)), m_arguments(new QLineEdit(this)),
+      m_workingDirectory(new QLineEdit(this)), m_environment(new QPlainTextEdit(this)),
+      m_beforeLaunch(new QLabel(this)), m_tasks(new QPlainTextEdit(this)), m_members(new QListWidget(this)),
+      m_process(new QLineEdit(this)), m_note(new QLabel(this)), m_error(new QLabel(this)) {
     setObjectName(QStringLiteral("editRunConfigurationsDialog"));
     setWindowTitle(tr("Run/Debug Configurations"));
     setModal(true);
@@ -214,20 +216,16 @@ RunConfigurationsDialog::RunConfigurationsDialog(const run::RunConfigurationSet&
     form->addRow(tr("Name:"), m_name);
     form->addRow(tr("Type:"), m_type);
     form->addRow(tr("Target:"), m_target);
-    m_remoteEndpoint = new QLineEdit(this);
     m_remoteEndpoint->setObjectName(QStringLiteral("runConfigurationRemoteEndpoint"));
     m_remoteEndpoint->setPlaceholderText(tr("Application remote target id"));
     form->addRow(tr("Remote endpoint:"), m_remoteEndpoint);
     form->addRow(tr("Program:"), m_program);
-    m_luaScript = new QLineEdit(this);
     m_luaScript->setObjectName(QStringLiteral("runConfigurationLuaScript"));
     m_luaScript->setPlaceholderText(tr("Absolute script path"));
-    m_interpreterArguments = new QLineEdit(this);
     m_interpreterArguments->setObjectName(QStringLiteral("runConfigurationInterpreterArguments"));
     m_interpreterArguments->setToolTip(
         tr("Explicit CLI profile: Lua 5.4 -E/-W/-v/-e/-l; LuaJIT -E/-v/-e/-l/-jon/-joff; Luau -O0..2/-g0..2. REPL "
            "flags follow the selected runtime."));
-    m_luaRuntime = new QComboBox(this);
     m_luaRuntime->setObjectName(QStringLiteral("runConfigurationLuaRuntime"));
     m_luaRuntime->addItem(tr("Lua 5.4"), "lua54");
     m_luaRuntime->addItem(tr("LuaJIT"), "luajit");
@@ -238,7 +236,6 @@ RunConfigurationsDialog::RunConfigurationsDialog(const run::RunConfigurationSet&
     form->addRow(tr("Lua script:"), m_luaScript);
     form->addRow(tr("Interpreter flags:"), m_interpreterArguments);
     form->addRow(tr("Engine project:"), m_engineProject);
-    m_engineDebugMode = new QComboBox(this);
     m_engineDebugMode->setObjectName(QStringLiteral("runConfigurationEngineDebugMode"));
     m_engineDebugMode->addItem(tr("Lua"), static_cast<int>(run::EngineDebugMode::Lua));
     m_engineDebugMode->addItem(tr("Native + Lua"), static_cast<int>(run::EngineDebugMode::NativeAndLua));

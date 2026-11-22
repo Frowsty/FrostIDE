@@ -57,6 +57,7 @@ public:
     [[nodiscard]] virtual Result<void> selectProfile(std::size_t index) = 0;
     // Stop the running configure or build.
     virtual void cancel() = 0;
+    // NOLINTNEXTLINE(performance-unnecessary-value-param): virtual interface transfers ownership for overrides.
     [[nodiscard]] virtual Result<void> configureCache(std::vector<project::CMakeCacheVariable>) {
         return fail(ErrorCode::Unsupported, "cache editing is unavailable");
     }

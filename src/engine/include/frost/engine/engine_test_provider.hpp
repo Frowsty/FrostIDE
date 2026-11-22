@@ -97,15 +97,14 @@ struct EngineTestExecution {
 [[nodiscard]] Result<EngineTestListing> discoverEngineSceneTests(io::IFileSystem& fs, io::IProcessLauncher& launcher,
                                                                  const EngineTestProviderOptions& options,
                                                                  const std::function<bool()>& admitted,
-                                                                 std::stop_token stop = {});
+                                                                 const std::stop_token& stop = {});
 // Empty ids means every discovered scene. Rejects unlisted/duplicate ids before any child starts;
 // sends one native test.run selection, preserving shared test-session state. The CLI only emits its
 // final command report: cancellation/refusal/malformed output yields no invented partial results.
-[[nodiscard]] EngineTestExecution runEngineSceneTests(io::IFileSystem& fs, io::IProcessLauncher& launcher,
-                                                      const EngineTestProviderOptions& options,
-                                                      const EngineTestListing& listing,
-                                                      std::span<const std::string> ids,
-                                                      const std::function<bool()>& admitted, std::stop_token stop = {});
+[[nodiscard]] EngineTestExecution
+runEngineSceneTests(io::IFileSystem& fs, io::IProcessLauncher& launcher, const EngineTestProviderOptions& options,
+                    const EngineTestListing& listing, std::span<const std::string> ids,
+                    const std::function<bool()>& admitted, const std::stop_token& stop = {});
 // Actual failed scene IDs from retained complete results, in listing order. Pure, O(listing*results).
 [[nodiscard]] std::vector<std::string> failedEngineSceneTests(const EngineTestListing& listing,
                                                               std::span<const EngineSceneTestResult> results);

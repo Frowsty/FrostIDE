@@ -288,9 +288,9 @@ Result<HostedCommentPage> parseHostedComments(const HostingRequest& request, std
             const auto side = value(note, "side");
             if (*current) {
                 if (side == "LEFT")
-                    comment.oldLine = **current;
+                    comment.oldLine = *current;
                 else if (side == "RIGHT")
-                    comment.newLine = **current;
+                    comment.newLine = *current;
                 else
                     return fail(ErrorCode::Corrupt, "Unknown GitHub comment side");
             }
@@ -471,7 +471,7 @@ Result<void> validateHostedCommentMutation(const HostingRequest& request, std::s
     return {};
 }
 Result<HostedDiffSnapshot> loadHostedDiff(io::IProcessLauncher& launcher, const HostingRequest& request,
-                                          const std::function<bool()>& admitted, std::stop_token stop) {
+                                          const std::function<bool()>& admitted, const std::stop_token& stop) {
     auto details = request;
     details.operation = HostingOperation::Details;
     auto before = runHosting(launcher, details, admitted, stop);
@@ -509,7 +509,7 @@ Result<void> verifyHostedDiff(io::IProcessLauncher& launcher, const HostingReque
         return fail(ErrorCode::InvalidArgument, "No reviewed diff evidence");
     auto details = request;
     details.operation = HostingOperation::Details;
-    auto bytes = runHosting(launcher, details, admitted, stop);
+    auto bytes = runHosting(launcher, details, admitted, std::move(stop));
     if (!bytes)
         return std::unexpected(bytes.error());
     auto rows = parseHostedReviews(request.provider, "[" + *bytes + "]");

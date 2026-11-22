@@ -56,7 +56,7 @@ bool validTarget(std::string_view name) {
 }
 } // namespace
 Result<CMakeRenameCapture> planCMakeTargetRename(const CMakeLanguageInput& input, LspPosition position,
-                                                 std::string newName) {
+                                                 const std::string& newName) {
     if (!input.model || !input.model->inputsAvailable)
         return fail(ErrorCode::Unsupported,
                     "Configure this project to supply actual target and CMake input provenance");
@@ -183,16 +183,12 @@ Result<CMakeRenameCapture> planCMakeTargetRename(const CMakeLanguageInput& input
                         return fail(ErrorCode::Busy, "Target definition differs from the last configured backtrace");
                     ++definitions;
                     slot = true;
-                } else if (command.name == "target_link_libraries" || command.name == "add_dependencies")
-                    slot = true;
-                else if (targetCommand(command.name) && i == 0)
-                    slot = true;
-                else if (command.name == "get_target_property" && i == 1)
-                    slot = true;
-                else if ((command.name == "if" || command.name == "elseif") && i > 0 &&
-                         command.arguments[i - 1].literal == "TARGET")
-                    slot = true;
-                else if (command.name == "add_test" && i > 0 && command.arguments[i - 1].literal == "COMMAND")
+                } else if (command.name == "target_link_libraries" || command.name == "add_dependencies" ||
+                           (targetCommand(command.name) && i == 0) ||
+                           (command.name == "get_target_property" && i == 1) ||
+                           ((command.name == "if" || command.name == "elseif") && i > 0 &&
+                            command.arguments[i - 1].literal == "TARGET") ||
+                           (command.name == "add_test" && i > 0 && command.arguments[i - 1].literal == "COMMAND"))
                     slot = true;
                 if (!slot)
                     return fail(ErrorCode::Unsupported,

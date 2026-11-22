@@ -30,7 +30,7 @@ bool validKey(std::string_view key) {
            std::ranges::all_of(key, [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); });
 }
 Result<std::string> socketDirectory() {
-    const std::string dir = "/tmp/frostide-ipc-" + std::to_string(geteuid());
+    std::string dir = "/tmp/frostide-ipc-" + std::to_string(geteuid());
     if (mkdir(dir.c_str(), 0700) != 0 && errno != EEXIST)
         return fail(ErrorCode::IoError, "cannot create IPC directory");
     struct stat st{};
@@ -148,7 +148,7 @@ Result<void> LocalIpcOwner::start(Handler handler) {
         chmod(m_impl->path.c_str(), 0600) != 0 || listen(m_impl->listener.fd, 8) != 0)
         return fail(ErrorCode::IoError, "cannot start local socket");
     auto* impl = m_impl.get();
-    impl->thread = std::jthread([impl, handler = std::move(handler)](std::stop_token stop) {
+    impl->thread = std::jthread([impl, handler = std::move(handler)](const std::stop_token& stop) {
         while (!stop.stop_requested()) {
             if (!waitFd(impl->listener.fd, POLLIN, std::chrono::steady_clock::now() + 100ms))
                 continue;

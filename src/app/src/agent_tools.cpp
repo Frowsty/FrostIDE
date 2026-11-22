@@ -170,7 +170,7 @@ struct AgentTools::State {
     bool admitsLocation(std::string_view uri) const {
         return agentWorkspaceResource(owner.m_services.fs, utf8(root), uri).has_value();
     }
-    void result(const QJsonValue& id, const QString& tool, Json data, Reply reply) {
+    void result(const QJsonValue& id, const QString& tool, Json data, const Reply& reply) {
         if (!live()) {
             reply(error(id, "workspace consent expired"));
             return;
@@ -223,7 +223,7 @@ struct AgentTools::State {
             if (diagnostic.severity == lang::DiagnosticSeverity::Error)
                 previous.insert(diagnostic.code + ":" + diagnostic.message);
     }
-    void hook(const QJsonValue& id, const QString& tool, const QJsonObject& arguments, Reply reply) {
+    void hook(const QJsonValue& id, const QString& tool, const QJsonObject& arguments, const Reply& reply) {
         auto args = arguments;
         if (args.value("input").isObject())
             args = args.value("input").toObject();
@@ -696,7 +696,7 @@ struct AgentTools::State {
         if (tool == "rename_symbol") {
             params.set("newName", utf8(args.value("newName").toString()));
             const auto newName = utf8(args.value("newName").toString());
-            const auto source = *path;
+            const auto& source = *path;
             lsp("textDocument/rename", std::move(params),
                 [this, task, source, line, character, newName](Result<Json> result) {
                     if (!result) {
@@ -808,7 +808,7 @@ Result<void> AgentTools::start(const QString& root, const QString& configDirecto
                         waiter->changed.notify_all();
                         return;
                     }
-                    guard->request(envelope.value("request").toObject(), [waiter](QJsonObject response) {
+                    guard->request(envelope.value("request").toObject(), [waiter](const QJsonObject& response) {
                         std::lock_guard lock(waiter->mutex);
                         if (waiter->done)
                             return;
@@ -1070,11 +1070,11 @@ void AgentTools::request(const QJsonObject& request, Reply reply) {
                       .set("text", std::string(remaining.substr(0, size)))
                       .set("nextOffset", static_cast<std::uint64_t>(offset) + size)
                       .set("eof", static_cast<std::uint64_t>(offset) + size == bytes->size()),
-                  std::move(reply));
+                  reply);
         return;
     }
     if (tool == "post_edit_diagnostics" || tool == "stop_hook") {
-        m->hook(id, tool, args, std::move(reply));
+        m->hook(id, tool, args, reply);
         return;
     }
     if (tool == "file_problems" || tool == "workspace_diagnostics") {
@@ -1093,7 +1093,7 @@ void AgentTools::request(const QJsonObject& request, Reply reply) {
             reply(error(id, qs(data.error().message())));
             return;
         }
-        m->result(id, tool, std::move(*data), std::move(reply));
+        m->result(id, tool, std::move(*data), reply);
         return;
     }
     if (tool == "project_model") {
@@ -1111,14 +1111,14 @@ void AgentTools::request(const QJsonObject& request, Reply reply) {
             reply(error(id, "project model unavailable"));
             return;
         }
-        m->result(id, tool, std::move(entries), std::move(reply));
+        m->result(id, tool, std::move(entries), reply);
         return;
     }
     if (tool == "build_status") {
         auto data = Json::object().set("state", static_cast<int>(m->owner.build().state()));
         if (const auto& outcome = m->owner.build().lastOutcome())
             data.set("lastSucceeded", outcome->succeeded());
-        m->result(id, tool, std::move(data), std::move(reply));
+        m->result(id, tool, std::move(data), reply);
         return;
     }
     if (tool == "debugger_state") {
@@ -1132,7 +1132,7 @@ void AgentTools::request(const QJsonObject& request, Reply reply) {
                       .set("state", static_cast<int>(debugger->state()))
                       .set("generation", debugger->sessionGeneration())
                       .set("status", utf8(debugger->statusText())),
-                  std::move(reply));
+                  reply);
         return;
     }
     if (tool == "test_results") {
@@ -1148,7 +1148,7 @@ void AgentTools::request(const QJsonObject& request, Reply reply) {
                           .set("name", result.name)
                           .set("outcome", std::string(run::toString(result.outcome)))
                           .set("reason", result.reason));
-        m->result(id, tool, std::move(data), std::move(reply));
+        m->result(id, tool, std::move(data), reply);
         return;
     }
     if (tool == "inspection_info") {
@@ -1160,7 +1160,7 @@ void AgentTools::request(const QJsonObject& request, Reply reply) {
         const auto setting = info->stringAt("settingKey");
         info->set("configuredSeverity",
                   m->owner.m_services.settings.snapshot()->get(settings::Key<std::string>{setting}));
-        m->result(id, tool, std::move(*info), std::move(reply));
+        m->result(id, tool, std::move(*info), reply);
         return;
     }
     auto paramsJson = Json::object();
@@ -1196,7 +1196,7 @@ void AgentTools::request(const QJsonObject& request, Reply reply) {
         const auto issued = m->instance;
         agent::hierarchyEdges(
             tool == "type_hierarchy", std::move(paramsJson),
-            [guard, issued](std::string method, Json params, agent::IdeQueryDone done) {
+            [guard, issued](const std::string& method, Json params, agent::IdeQueryDone done) {
                 if (!guard || !guard->m->live() || guard->m->instance != issued) {
                     done(fail(ErrorCode::Cancelled, "hierarchy consent expired"));
                     return;
@@ -1214,7 +1214,7 @@ void AgentTools::request(const QJsonObject& request, Reply reply) {
                 if (!value)
                     reply(error(id, qs(value.error().message())));
                 else
-                    guard->m->result(id, tool, std::move(*value), std::move(reply));
+                    guard->m->result(id, tool, std::move(*value), reply);
             });
         return;
     }
@@ -1224,7 +1224,7 @@ void AgentTools::request(const QJsonObject& request, Reply reply) {
         else {
             auto scoped =
                 agent::scopedLocations(*value, [this](std::string_view uri) { return m->admitsLocation(uri); });
-            m->result(id, tool, std::move(scoped).value_or(Json::array()), std::move(reply));
+            m->result(id, tool, std::move(scoped).value_or(Json::array()), reply);
         }
     });
 }

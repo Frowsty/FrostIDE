@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <map>
+#include <ranges>
 namespace frost::project {
 namespace {
 bool samePath(std::string_view a, std::string_view b) {
@@ -145,8 +146,8 @@ Result<std::vector<CMakeMembershipPlan>> planCMakeGeneratedSources(const CMakePr
     std::vector<CMakeMembershipPlan> result;
     for (auto& [path, definition] : definitions) {
         auto after = definition.before;
-        for (auto it = definition.additions.rbegin(); it != definition.additions.rend(); ++it)
-            after.insert(it->first, it->second);
+        for (const auto& [offset, text] : std::views::reverse(definition.additions))
+            after.insert(offset, text);
         result.push_back({path, std::move(definition.before), std::move(after)});
     }
     return result;

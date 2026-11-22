@@ -43,14 +43,19 @@ public:
     using Json = rpc::Json;
     explicit EngineSessionPeer(std::string project, char identity = 'a')
         : m_project(io::realFileSystem().canonicalPath(project).value_or(std::move(project))), m_instance(32, identity),
-          m_generation(32, identity == 'b' ? 'c' : 'b') {
+          m_generation(32, identity == 'b' ? 'c' : 'b')
+#ifndef _WIN32
+          ,
+          m_listener(socket(AF_INET, SOCK_STREAM, IPPROTO_TCP))
+#endif
+    {
 #ifdef _WIN32
         WSADATA data{};
         if (WSAStartup(MAKEWORD(2, 2), &data) != 0)
             return;
         m_initialized = true;
-#endif
         m_listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+#endif
         if (m_listener == kInvalid)
             return;
         sockaddr_in address{};
@@ -66,7 +71,7 @@ public:
         if (getsockname(m_listener, reinterpret_cast<sockaddr*>(&address), &size) != 0)
             return;
         m_port = ntohs(address.sin_port);
-        m_worker = std::jthread([this](std::stop_token stop) { serve(stop); });
+        m_worker = std::jthread([this](const std::stop_token& stop) { serve(stop); });
     }
     ~EngineSessionPeer() {
         stop();
@@ -183,7 +188,7 @@ public:
             data.set("source", Json::object().set("path", std::move(path)).set("line", line));
         event("log.entry", std::move(data));
     }
-    void state(std::string mode, bool paused = false, std::uint64_t frames = 0) {
+    void state(const std::string& mode, bool paused = false, std::uint64_t frames = 0) {
         event("play.state", Json::object()
                                 .set("state", paused ? std::string("Paused") : mode)
                                 .set("mode", mode)
@@ -303,7 +308,7 @@ private:
         }
         return true;
     }
-    void serve(std::stop_token stop) {
+    void serve(const std::stop_token& stop) {
         while (!stop.stop_requested() && !ready(m_listener, 10)) {
         }
         if (stop.stop_requested())

@@ -236,7 +236,7 @@ Result<std::vector<EngineSceneTestResult>> parseEngineTestRun(const Json& j, std
         if (const auto* code = s.find("exitCode")) {
             if (code->kind() != Json::Kind::Integer || !code->asInteger())
                 return fail(ErrorCode::Corrupt, "test.run: invalid exit code");
-            r.exitCode = *code->asInteger();
+            r.exitCode = code->asInteger();
         }
         if (const auto* log = s.find("logTail")) {
             if (!log->isArray() || log->size() > kEntries)

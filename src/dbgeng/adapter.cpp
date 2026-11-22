@@ -116,10 +116,15 @@ public:
         HRESULT status = create(__uuidof(IDebugClient5), reinterpret_cast<void**>(m_client.put()));
         if (FAILED(status))
             return std::unexpected(engineError("DebugCreate", status));
-        if (FAILED(status = m_client.query(m_control)) || FAILED(status = m_client.query(m_symbols)) ||
-            FAILED(status = m_client.query(m_systems)))
+        status = m_client.query(m_control);
+        if (SUCCEEDED(status))
+            status = m_client.query(m_symbols);
+        if (SUCCEEDED(status))
+            status = m_client.query(m_systems);
+        if (FAILED(status))
             return std::unexpected(engineError("DbgEng interfaces", status));
-        if (FAILED(status = m_client->SetOutputCallbacksWide(&m_output)))
+        status = m_client->SetOutputCallbacksWide(&m_output);
+        if (FAILED(status))
             return std::unexpected(engineError("debug output callback", status));
         status = m_client->SetOutputMask(DEBUG_OUTPUT_NORMAL | DEBUG_OUTPUT_ERROR | DEBUG_OUTPUT_WARNING |
                                          DEBUG_OUTPUT_DEBUGGEE);
@@ -474,7 +479,8 @@ public:
         if (FAILED(status))
             return std::unexpected(engineError("stack trace", status));
         ULONG nativeThread = 0;
-        if (FAILED(status = m_systems->GetCurrentThreadId(&nativeThread)))
+        status = m_systems->GetCurrentThreadId(&nativeThread);
+        if (FAILED(status))
             return std::unexpected(engineError("selected thread", status));
         Json result = Json::array();
         const auto end = std::min<std::uint64_t>(count, start + (levels == 0 ? 4096 : levels));

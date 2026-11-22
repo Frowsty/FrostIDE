@@ -18,7 +18,7 @@ struct ShaderLanguageAnswer {
     std::vector<engine::ShaderLanguageSource> sources;
 };
 [[nodiscard]] Result<ShaderLanguageCapture> captureShaderLanguage(io::IFileSystem&, std::string root,
-                                                                  std::string program, std::string query,
+                                                                  const std::string& program, const std::string& query,
                                                                   const ShaderLanguageImages&, std::string method,
                                                                   size_t offset);
 [[nodiscard]] Result<ShaderLanguageAnswer> validateShaderLanguage(io::IFileSystem&, const ShaderLanguageCapture&,

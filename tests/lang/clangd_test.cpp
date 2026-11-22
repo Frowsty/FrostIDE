@@ -700,7 +700,7 @@ frost::text::Document load(const std::string& path) {
 }
 
 frost::Result<frost::lang::Json> analysisSymbol(Env& env, ClangdService& service, const std::string& path,
-                                                frost::text::Snapshot snapshot, std::string_view name,
+                                                const frost::text::Snapshot& snapshot, std::string_view name,
                                                 std::stop_token stop = {}) {
     const auto offset = snapshot.text().find(name);
     if (offset == std::string::npos)
@@ -717,8 +717,8 @@ frost::Result<frost::lang::Json> analysisSymbol(Env& env, ClangdService& service
     return result;
 }
 
-void expectAnalysisSymbol(Env& env, ClangdService& service, const std::string& path, frost::text::Snapshot snapshot,
-                          std::string_view name) {
+void expectAnalysisSymbol(Env& env, ClangdService& service, const std::string& path,
+                          const frost::text::Snapshot& snapshot, std::string_view name) {
     auto actual = analysisSymbol(env, service, path, snapshot, name);
     ASSERT_TRUE(actual) << actual.error().describe();
     ASSERT_TRUE(actual->isArray()) << actual->dump();

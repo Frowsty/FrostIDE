@@ -25,8 +25,9 @@
 #ifdef _WIN32
 #include <windows.h>
 #else
+#include <csignal>
+
 #include <pthread.h>
-#include <signal.h>
 #endif
 
 namespace frost::io {

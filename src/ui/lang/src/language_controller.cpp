@@ -320,10 +320,10 @@ enum class Availability : std::uint8_t {
 
 bool available(Availability availability, const LanguageCapabilities& caps) {
     switch (availability) {
-    case Availability::Managed: return caps.languageId == "csharp";
+    case Availability::Managed:
     case Availability::LibrarySources: return caps.languageId == "csharp";
     case Availability::Always: return true;
-    case Availability::ClangdTweaks: return caps.clangdTweaks;
+    case Availability::ClangdTweaks:
     case Availability::AstOperations: return caps.clangdTweaks;
     case Availability::OptimizeImports: return caps.optimizeImports;
     case Availability::Surround: return caps.surround;
@@ -506,7 +506,7 @@ QString LanguageController::emptyResultMessage(const QString& none) const {
     return QStringLiteral("%1 (%2 returned no result)").arg(none, server);
 }
 
-void LanguageController::runCodeAction(fl::CodeActionItem action, std::shared_ptr<SemanticApply> semantic) {
+void LanguageController::runCodeAction(fl::CodeActionItem action, const std::shared_ptr<SemanticApply>& semantic) {
     const QString title = qs(action.title);
     if (!action.disabledReason.empty()) {
         report(Error(ErrorCode::Unsupported, action.disabledReason), action.title);

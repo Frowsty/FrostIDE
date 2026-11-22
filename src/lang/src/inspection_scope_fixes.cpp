@@ -9,6 +9,7 @@
 #include <array>
 #include <functional>
 #include <map>
+#include <ranges>
 #include <set>
 #include <tuple>
 namespace frost::lang {
@@ -48,7 +49,7 @@ bool InspectionScopeFixProposal::ready() const {
     return !files.empty() && std::ranges::none_of(groups, [](const auto& group) { return !group.refusal.empty(); });
 }
 Result<InspectionScopeCapture>
-captureInspectionScope(io::IFileSystem& fs, const InspectionRequest& request, std::string projectRoot,
+captureInspectionScope(io::IFileSystem& fs, const InspectionRequest& request, const std::string& projectRoot,
                        std::span<const std::pair<std::string, std::string>> openBuffers) {
     InspectionScopeCapture result;
     auto root = io::normalizePath(projectRoot);
@@ -71,7 +72,7 @@ captureInspectionScope(io::IFileSystem& fs, const InspectionRequest& request, st
     }
     std::set<std::string> captured, physical;
     std::size_t retained = 0;
-    auto add = [&](std::string path, bool source = true) -> Result<void> {
+    auto add = [&](const std::string& path, bool source = true) -> Result<void> {
         const auto key = documentKey(path);
         if (captured.contains(key))
             return {};
@@ -374,8 +375,8 @@ Result<InspectionScopeFixProposal> planInspectionScopeFixes(const Json& decoded,
             }
         const auto& image = *images.at(key);
         auto after = image.contents;
-        for (auto it = values.rbegin(); it != values.rend(); ++it)
-            after.replace(it->offset, it->length, it->text);
+        for (const auto& value : std::views::reverse(values))
+            after.replace(value.offset, value.length, value.text);
         if (after != image.contents)
             result.files.push_back({image.path, image.contents, std::move(after), image.buffer});
     }

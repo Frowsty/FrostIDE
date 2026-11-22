@@ -22,8 +22,9 @@
 namespace frost::ui {
 
 namespace {
-Result<void> registerActions(input::ActionRegistry& registry, std::function<DebugController*()> current,
-                             std::function<Result<void>()> launch = {}, std::function<bool()> mayLaunch = {}) {
+Result<void> registerActions(input::ActionRegistry& registry, const std::function<DebugController*()>& current,
+                             const std::function<Result<void>()>& launch = {},
+                             const std::function<bool()>& mayLaunch = {}) {
     using Enabled = std::function<bool(const DebugController&)>;
     using Run = std::function<void(DebugController&)>;
     const auto behaviour = [](std::string_view id) -> std::pair<Enabled, Run> {
@@ -114,11 +115,9 @@ Result<void> registerDebugActions(input::ActionRegistry& registry, DebugControll
     return registerActions(registry, [guarded] { return guarded.data(); });
 }
 Result<void> registerDebugActions(input::ActionRegistry& registry, DebugSessionRegistry& sessions,
-                                  std::function<Result<void>()> launch, std::function<bool()> mayLaunch) {
+                                  const std::function<Result<void>()>& launch, const std::function<bool()>& mayLaunch) {
     const QPointer<DebugSessionRegistry> guarded(&sessions);
-    return registerActions(
-        registry, [guarded] { return guarded ? guarded->selected() : nullptr; }, std::move(launch),
-        std::move(mayLaunch));
+    return registerActions(registry, [guarded] { return guarded ? guarded->selected() : nullptr; }, launch, mayLaunch);
 }
 
 namespace {

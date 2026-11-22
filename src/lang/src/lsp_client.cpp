@@ -555,7 +555,7 @@ sched::Task<Result<ServerCapabilities>> LspClient::initialize(std::stop_token to
         if (!encoding || (m_shared->options.utf16Only && *encoding != PositionEncoding::Utf16) ||
             (selected && *selected != *encoding))
             return false;
-        selected = *encoding;
+        selected = encoding;
         return true;
     };
     if (!acceptEncoding(serverCapabilities ? serverCapabilities->stringAt("positionEncoding") : "") ||

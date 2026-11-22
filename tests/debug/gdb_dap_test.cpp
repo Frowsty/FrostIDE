@@ -130,7 +130,7 @@ TEST(GdbDap, UntrustedLaunchAndInvalidAttachCannotStartAnAdapter) {
     auto trust = project::TrustStore::open(fs, test::workPath("data/trust"));
     ASSERT_TRUE(trust);
     int calls = 0;
-    AdapterFactory factory = [&](DapHandlers) -> Result<std::unique_ptr<IDebugAdapterClient>> {
+    AdapterFactory factory = [&](const DapHandlers&) -> Result<std::unique_ptr<IDebugAdapterClient>> {
         ++calls;
         return fail(ErrorCode::NotFound, "must not start");
     };

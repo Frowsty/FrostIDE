@@ -74,21 +74,21 @@ Result<io::ProcessSpec> nativeLaunch(const NativeLaunch& launch, const Json& sta
     if (*route != AuthRoute::Subscription)
         spec.arguments.insert(spec.arguments.begin(), "--bare");
     if (!launch.resume.empty()) {
-        spec.arguments.push_back("--resume");
+        spec.arguments.emplace_back("--resume");
         spec.arguments.push_back(launch.resume);
     }
     if (launch.forkSession)
-        spec.arguments.push_back("--fork-session");
+        spec.arguments.emplace_back("--fork-session");
     if (!launch.resumeAt.empty()) {
-        spec.arguments.push_back("--resume-session-at");
+        spec.arguments.emplace_back("--resume-session-at");
         spec.arguments.push_back(launch.resumeAt);
     }
     if (!launch.model.empty()) {
-        spec.arguments.push_back("--model");
+        spec.arguments.emplace_back("--model");
         spec.arguments.push_back(launch.model);
     }
     if (!launch.effort.empty()) {
-        spec.arguments.push_back("--effort");
+        spec.arguments.emplace_back("--effort");
         spec.arguments.push_back(launch.effort);
     }
     spec.environment.emplace_back("CLAUDE_CODE_SSE_PORT", std::to_string(launch.idePort));

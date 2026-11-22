@@ -324,7 +324,7 @@ public:
     [[nodiscard]] std::optional<io::ProcessId> hostPid() const;
 
 private:
-    void run(std::stop_token stop);
+    void run(const std::stop_token& stop);
     void publish(const std::function<void(SolutionEvaluationStatus&)>& change);
     // Adds or replaces (by project path) one project's result; returns whether anything changed.
     bool storeResult(EvaluatedProjectItems items, std::optional<ProjectClCommandLines> lines) FROST_REQUIRES(m_mutex);

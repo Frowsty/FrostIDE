@@ -445,9 +445,11 @@ public:
             m_byLine[registration.line].push_back(&registration);
     }
 
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool shouldVisitTemplateInstantiations() const { return true; }
 
     // Only this actual engine API promises that argument zero is a complete Lua chunk.
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitCallExpr(clang::CallExpr* call) {
         const auto* callee = call->getDirectCallee();
         if (!callee || callee->getQualifiedNameAsString() != "Frost::ScriptEngine::ExecuteString")
@@ -470,6 +472,7 @@ public:
         return true;
     }
 
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitCXXMemberCallExpr(clang::CXXMemberCallExpr* call) {
         const auto* method = call->getMethodDecl();
         if (!method)

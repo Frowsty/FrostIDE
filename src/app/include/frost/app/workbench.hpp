@@ -542,12 +542,12 @@ public:
     [[nodiscard]] Result<void> refreshEngineInstances();
     [[nodiscard]] Result<void> pairEngineInstance(std::string_view instanceId);
     void disconnectEngineSession();
-    [[nodiscard]] Result<std::uint64_t> sendEngineCommand(std::string method, lang::Json params);
+    [[nodiscard]] Result<std::uint64_t> sendEngineCommand(const std::string& method, lang::Json params);
     [[nodiscard]] Result<build::RunId> startEngineEditor();
     [[nodiscard]] Result<void> validateEngineScript();
     [[nodiscard]] Result<void> cancelEngineRequest();
     [[nodiscard]] Result<void> refreshEnginePerformance();
-    [[nodiscard]] Result<void> showAssetInFrostEditor(std::string path, bool openAsset = false);
+    [[nodiscard]] Result<void> showAssetInFrostEditor(const std::string& path, bool openAsset = false);
     // Paired-engine Lua debugging never grants ownership of an external host process.
     [[nodiscard]] Result<void> startEngineLuaDebug(bool startPlay = true);
     [[nodiscard]] ui::MixedDebugSnapshot mixedDebugSnapshot() const;
@@ -678,9 +678,9 @@ public:
     // Captures the active project/database/dirty documents and asynchronously prepares one atomic
     // replacement proposal. No mutation; consumer previews before applyRefactoring. Owner thread.
     void prepareCppInspectionScopeFixes(lang::InspectionScope scope, lang::InspectionProfile profile,
-                                        std::stop_token cancel,
+                                        const std::stop_token& cancel,
                                         std::function<void(Result<document::RefactoringPlan>)> done);
-    void prepareCppRefactoring(lang::CppRefactoringRequest request, std::stop_token cancel,
+    void prepareCppRefactoring(lang::CppRefactoringRequest request, const std::stop_token& cancel,
                                std::function<void(Result<document::RefactoringPlan>)> done);
     [[nodiscard]] Result<document::RefactoringOutcome> undoRefactoring();
     [[nodiscard]] Result<document::RefactoringOutcome> redoRefactoring();
@@ -813,8 +813,8 @@ public:
     // Shutdown/remove/change cancels owned observations; returned JSON is declared metadata.
     [[nodiscard]] Result<void> setExtensionCatalog(std::string manifest);
     [[nodiscard]] lang::Json extensionCatalogState() const;
-    [[nodiscard]] Result<void> debugWithExtension(std::string contributionId);
-    [[nodiscard]] Result<void> executeExtensionCommand(std::string contributionId);
+    [[nodiscard]] Result<void> debugWithExtension(const std::string& contributionId);
+    [[nodiscard]] Result<void> executeExtensionCommand(const std::string& contributionId);
     // WorkbenchOptions::metadataCacheDirectory, as the language features got it.
     [[nodiscard]] const std::string& metadataCacheDirectory() const noexcept {
         return m_options.metadataCacheDirectory;
@@ -885,8 +885,8 @@ private:
 
     void registerNativeAnalysisActions();
     void startNativeAnalysis(bool importProfiles = false, bool profile = false);
-    void prepareNativeAnalysis(const run::RunConfiguration& configuration, std::stop_token stop,
-                               std::function<void(Result<run::LaunchPlan>)> done);
+    void prepareNativeAnalysis(const run::RunConfiguration& configuration, const std::stop_token& stop,
+                               const std::function<void(Result<run::LaunchPlan>)>& done);
     void registerRefactoringActions();
     [[nodiscard]] Result<void> ensureRefactoringCoordinator(const std::string& target);
     void registerCppRefactoringActions();
@@ -895,8 +895,8 @@ private:
     void editRemoteTargets();
     void showWslCMake();
     [[nodiscard]] Result<run::RunHandlers> prepareRemoteRun(const run::RunConfiguration& configuration);
-    void showCppIndex(std::string operation, std::string symbol = {});
-    void showCppRefactoring(std::string operation);
+    void showCppIndex(const std::string& operation, std::string symbol = {});
+    void showCppRefactoring(const std::string& operation);
     void showCppInspectionScopeFixes();
     void moveCppProjectSource();
     void showCppPublishedFixes();
@@ -905,13 +905,14 @@ private:
     void registerLuaRefactoringActions();
     void registerStructuralSearchActions();
     void showStructuralSearch(bool replace);
-    void showLuaRefactoring(std::string operation);
+    void showLuaRefactoring(const std::string& operation);
     void renameLuaModule();
     void publishRefactoringOutcome(const document::RefactoringOutcome& outcome);
     [[nodiscard]] bool refactoringTrusted(TransactionId token) const;
     [[nodiscard]] Result<document::RefactoringOutcome> runRefactoringHistory(TransactionId token, bool redo);
     void checkCppRename(std::string path, lang::LspPosition position, std::string newName, lang::WorkspaceEdit required,
-                        lang::WorkspaceEdit offered, std::stop_token cancel, std::function<void(Result<void>)> done);
+                        lang::WorkspaceEdit offered, const std::stop_token& cancel,
+                        std::function<void(Result<void>)> done);
     [[nodiscard]] Result<void> admitCppRename(const lang::WorkspaceEdit& selected, document::RefactoringPlan& plan);
     void showDependencies();
     void createBuildService();
@@ -978,7 +979,8 @@ private:
     [[nodiscard]] Result<std::pair<std::string, std::string>> projectEditTools();
     [[nodiscard]] Result<project::HostEvaluation>
     evaluatePropertyPage(const std::string& projectPath, const std::string& root, const std::string& solution,
-                         std::string_view configuration, const std::vector<std::string>& keys, std::stop_token stop);
+                         std::string_view configuration, const std::vector<std::string>& keys,
+                         const std::stop_token& stop);
     // Whether the solution root holds a project edit journal (an interrupted edit); errors read as true.
     [[nodiscard]] bool projectEditJournalPresent();
     // Reloads the solution after a committed edit and publishes it to the build, run and explorer.

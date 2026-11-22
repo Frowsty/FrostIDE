@@ -742,6 +742,115 @@ TEST_F(FileTransactionReplace, InheritedSourceSecurityRoundTripsFromPrivateStore
     ASSERT_TRUE(changed) << changed.error().describe();
     EXPECT_FALSE(recoverFileReplacement(settled, before, after, true, 65536));
 }
+
+TEST_F(FileTransactionReplace, LegacyAndAutoInheritedSecurityBothRoundTripExactBytes) {
+    const auto setAutoInherited = [](std::string_view path, bool enabled) -> frost::Result<void> {
+        auto wide = toWin32Path(path);
+        if (!wide)
+            return std::unexpected(wide.error());
+        HANDLE handle =
+            CreateFileW(wide->c_str(), READ_CONTROL | WRITE_DAC, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                        nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+        if (handle == INVALID_HANDLE_VALUE)
+            return std::unexpected(lastWin32Error("test: open security target", path));
+        constexpr DWORD fields = OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION;
+        DWORD size = 0;
+        GetKernelObjectSecurity(handle, fields, nullptr, 0, &size);
+        if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || size < sizeof(SECURITY_DESCRIPTOR_RELATIVE)) {
+            const auto error = lastWin32Error("test: size security target", path);
+            CloseHandle(handle);
+            return std::unexpected(error);
+        }
+        std::vector<unsigned char> sd(size);
+        if (!GetKernelObjectSecurity(handle, fields, sd.data(), size, &size)) {
+            const auto error = lastWin32Error("test: read security target", path);
+            CloseHandle(handle);
+            return std::unexpected(error);
+        }
+        SECURITY_DESCRIPTOR_CONTROL control{};
+        DWORD revision = 0;
+        if (!GetSecurityDescriptorControl(sd.data(), &control, &revision)) {
+            const auto error = lastWin32Error("test: read control bits", path);
+            CloseHandle(handle);
+            return std::unexpected(error);
+        }
+        if (enabled)
+            control =
+                static_cast<SECURITY_DESCRIPTOR_CONTROL>(control | SE_DACL_AUTO_INHERITED | SE_DACL_AUTO_INHERIT_REQ);
+        else
+            control = static_cast<SECURITY_DESCRIPTOR_CONTROL>(control & ~SE_DACL_AUTO_INHERITED);
+        std::memcpy(sd.data() + offsetof(SECURITY_DESCRIPTOR_RELATIVE, Control), &control, sizeof(control));
+        const DWORD security =
+            DACL_SECURITY_INFORMATION | ((control & SE_DACL_PROTECTED) ? PROTECTED_DACL_SECURITY_INFORMATION
+                                                                       : UNPROTECTED_DACL_SECURITY_INFORMATION);
+        const BOOL applied = SetKernelObjectSecurity(handle, security, sd.data());
+        const DWORD lastError = applied ? ERROR_SUCCESS : GetLastError();
+        CloseHandle(handle);
+        if (!applied)
+            return std::unexpected(win32Error(lastError, "test: set control bits", path));
+        return {};
+    };
+    for (const bool autoInherited : {true, false}) {
+        const auto path = scratch.join(autoInherited ? "auto_sd.cpp" : "legacy_sd.cpp");
+        ASSERT_TRUE(fs.writeFileAtomic(path, before));
+        auto configured = setAutoInherited(path, autoInherited);
+        ASSERT_TRUE(configured) << configured.error().describe();
+        auto expected = supportedSnapshot(path);
+        ASSERT_TRUE(expected) << expected.error().describe();
+        auto value = prepareFileReplacement(path, store, after, 65536, 65536);
+        ASSERT_TRUE(value) << value.error().describe();
+        ASSERT_TRUE(value->retireOriginal().complete());
+        auto installed = value->installAfter();
+        ASSERT_TRUE(installed.complete()) << installed.error->describe();
+        expectBytes(path, after);
+        auto restored = value->restoreBefore();
+        ASSERT_TRUE(restored.complete()) << restored.error->describe();
+        EXPECT_EQ(supportedSnapshot(path), expected);
+        expectBytes(path, before);
+        auto redone = value->reapplyAfter();
+        ASSERT_TRUE(redone.complete()) << redone.error->describe();
+        expectBytes(path, after);
+    }
+}
+
+TEST_F(FileTransactionReplace, LongFilenameAndTargetShortNameRoundTripAcrossReplaceAndUndo) {
+    const auto longTarget = scratch.join("long-shortname-target.cpp");
+    ASSERT_TRUE(fs.writeFileAtomic(longTarget, before));
+    const auto wide = toWin32Path(longTarget);
+    ASSERT_TRUE(wide);
+    const auto queryShortName = [&](const std::wstring& path) -> std::wstring {
+        WIN32_FIND_DATAW found{};
+        HANDLE search = FindFirstFileW(path.c_str(), &found);
+        EXPECT_NE(search, INVALID_HANDLE_VALUE);
+        if (search == INVALID_HANDLE_VALUE)
+            return {};
+        FindClose(search);
+        return found.cAlternateFileName;
+    };
+    bool customShortNameSet = false;
+    {
+        HANDLE handle = CreateFileW(wide->c_str(), DELETE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                    nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+        ASSERT_NE(handle, INVALID_HANDLE_VALUE);
+        if (SetFileShortNameW(handle, L"FRTR~1.CPP"))
+            customShortNameSet = true;
+        CloseHandle(handle);
+    }
+    const std::wstring expectedShortName = queryShortName(*wide);
+    if (customShortNameSet)
+        EXPECT_EQ(expectedShortName, L"FRTR~1.CPP");
+    auto value = prepareFileReplacement(longTarget, store, after, 65536, 65536);
+    ASSERT_TRUE(value) << value.error().describe();
+    ASSERT_TRUE(value->retireOriginal().complete());
+    auto installed = value->installAfter();
+    ASSERT_TRUE(installed.complete()) << installed.error->describe();
+    EXPECT_EQ(queryShortName(*wide), expectedShortName);
+    expectBytes(longTarget, after);
+    auto restored = value->restoreBefore();
+    ASSERT_TRUE(restored.complete()) << restored.error->describe();
+    EXPECT_EQ(queryShortName(*wide), expectedShortName);
+    expectBytes(longTarget, before);
+}
 #endif
 
 TEST_F(FileTransactionReplace, PrivateStoreProvisioningReusesOnlyRestrictedOwnedDirectories) {
@@ -754,6 +863,32 @@ TEST_F(FileTransactionReplace, PrivateStoreProvisioningReusesOnlyRestrictedOwned
     auto first = acquireTransactionStoreLease(*created);
     ASSERT_TRUE(first) << first.error().describe();
     EXPECT_FALSE(acquireTransactionStoreLease(*created));
+}
+
+TEST_F(FileTransactionReplace, PrivateStoreFallbackIsolatesSiblingWorkspacesDeterministically) {
+    const auto wsA = scratch.join("ws-a");
+    const auto wsB = scratch.join("ws-b");
+    ASSERT_TRUE(fs.createDirectories(wsA));
+    ASSERT_TRUE(fs.createDirectories(wsB));
+    const auto fileA = wsA + "/a.cpp";
+    const auto fileB = wsB + "/b.cpp";
+    ASSERT_TRUE(fs.writeFileAtomic(fileA, "a"));
+    ASSERT_TRUE(fs.writeFileAtomic(fileB, "b"));
+    const auto unavailablePreferred = scratch.join("missing-parent/preferred");
+    auto storeA1 = ensurePrivateTransactionStore(fileA, unavailablePreferred, wsA);
+    ASSERT_TRUE(storeA1) << storeA1.error().describe();
+    auto storeA2 = ensurePrivateTransactionStore(fileA, unavailablePreferred, wsA);
+    ASSERT_TRUE(storeA2) << storeA2.error().describe();
+    auto storeB = ensurePrivateTransactionStore(fileB, unavailablePreferred, wsB);
+    ASSERT_TRUE(storeB) << storeB.error().describe();
+    EXPECT_EQ(*storeA1, *storeA2);
+    EXPECT_NE(*storeA1, *storeB);
+    EXPECT_EQ(parentPath(*storeA1), scratch.path());
+    EXPECT_EQ(parentPath(*storeB), scratch.path());
+    auto leaseA = acquireTransactionStoreLease(*storeA1);
+    ASSERT_TRUE(leaseA) << leaseA.error().describe();
+    auto leaseB = acquireTransactionStoreLease(*storeB);
+    ASSERT_TRUE(leaseB) << leaseB.error().describe();
 }
 TEST_F(FileTransactionReplace, FreshRecoveryReacquiresOwnedObjectsWithoutTrustingClaimedPhase) {
     FileReplacementReceipt saved;

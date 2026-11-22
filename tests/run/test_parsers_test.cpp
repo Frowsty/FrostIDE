@@ -388,7 +388,7 @@ TEST(TestRunnerSetup, CTestComesFromTheCacheAndThePresetAddsItsSelection) {
 #else
     const std::string ctest = "/sdk/cmake/bin/ctest";
     const std::string cmake = "/sdk/cmake/bin/cmake";
-    const std::string nativeCTest = ctest;
+    const std::string& nativeCTest = ctest;
 #endif
     frost::project::CMakeProfile profile;
     profile.name = "debug";

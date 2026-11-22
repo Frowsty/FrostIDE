@@ -341,7 +341,7 @@ TEST(WorkbenchInspection, ExportedScopeFixPreviewRefusesStaleHeaderThenAppliesAn
     dir.write("src/header.hpp", headerBefore);
     dir.write("src/context.hpp", contextBefore);
     dir.write(".clang-tidy", "Checks: '-*,modernize-use-nullptr'\nWarningsAsErrors: ''\n");
-    const auto source = dir.join("src/input.cpp"), header = dir.join("src/header.hpp");
+    const auto source = dir.join("src/input.cpp");
     ASSERT_TRUE(fl::writeCompileCommands(
         fs, dir.join("build"),
         std::vector<fl::CompileCommand>{{dir.path(), source, {"clang++", "-std=c++20", "-c", source}}}));

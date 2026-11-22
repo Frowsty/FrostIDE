@@ -12,12 +12,11 @@
 #include <QVBoxLayout>
 namespace frost::ui {
 DebugSessionsWindow::DebugSessionsWindow(DebugSessionRegistry& sessions, QWidget* parent)
-    : QWidget(parent), m_sessions(sessions) {
+    : QWidget(parent), m_sessions(sessions), m_selector(new QComboBox(this)), m_stack(new QStackedWidget(this)) {
     setObjectName(QStringLiteral("debugSessionsWindow"));
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     auto* row = new QHBoxLayout;
-    m_selector = new QComboBox(this);
     m_selector->setObjectName(QStringLiteral("debugSessionSelector"));
     m_selector->setAccessibleName(tr("Debugger session"));
     m_stopAll = new QPushButton(tr("Stop All"), this);
@@ -25,7 +24,6 @@ DebugSessionsWindow::DebugSessionsWindow(DebugSessionRegistry& sessions, QWidget
     row->addWidget(m_selector, 1);
     row->addWidget(m_stopAll);
     layout->addLayout(row);
-    m_stack = new QStackedWidget(this);
     layout->addWidget(m_stack, 1);
     connect(&sessions, &DebugSessionRegistry::sessionsChanged, this, &DebugSessionsWindow::refresh);
     connect(&sessions, &DebugSessionRegistry::sessionStateChanged, this, [this](DebugSessionId) { refresh(); });

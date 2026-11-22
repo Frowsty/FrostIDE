@@ -318,7 +318,7 @@ void Workbench::showStructuralSearch(bool replace) {
                         for (std::size_t index = 0; index < work->inputs.size(); ++index)
                             for (const auto& match : work->inputs[index].result->matches) {
                                 const auto& input = work->inputs[index];
-                                targets->push_back({index, match.range});
+                                targets->emplace_back(index, match.range);
                                 const int row = table->rowCount();
                                 table->insertRow(row);
                                 table->setItem(row, 0, new QTableWidgetItem(displaySsr(input.path)));

@@ -86,10 +86,10 @@ struct Graph {
 // Callers enforce Capture::current around this work; receipts are acquired once before file capture.
 [[nodiscard]] Result<void> captureOpenDocumentReceipts(io::IFileSystem& fs, Graph& graph,
                                                        std::span<const engine::BindingDocumentCapture> openDocuments,
-                                                       std::stop_token stop = {});
+                                                       const std::stop_token& stop = {});
 [[nodiscard]] Result<void> captureDocumentSnapshot(io::IFileSystem& fs, Graph& graph,
                                                    std::span<const engine::BindingDocumentCapture> openDocuments,
-                                                   std::string path, std::size_t& bytes);
+                                                   const std::string& path, std::size_t& bytes);
 struct ResultData {
     std::shared_ptr<Graph> graph;
     std::vector<engine::BindingUsage> usages;

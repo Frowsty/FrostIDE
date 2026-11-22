@@ -66,8 +66,8 @@ struct FileReplacementOutcome {
  * recovery material, not permanent authority: inverse revalidates it and current After first.
  * Read/rename-induced access/change times and a replacement's inode/file ID are not preserved.
  * First limited metadata profile (NOT metadata-complete or global-Apply-ready):
- * Windows: regular single-link NTFS; basic attributes/creation/write times and readable
- * owner/group/DACL. EA/ADS, special attributes, object IDs and workspace short names refuse on
+ * Windows: regular single-link NTFS; basic attributes/creation/write times, readable
+ * owner/group/DACL and target 8.3 short name. EA/ADS, special attributes and object IDs refuse on
  * positive observation; failed inspections are errors. SACL is UNOBSERVED/UNPROVEN, not claimed
  * preserved. No privilege changes. Unpublished After/store DACLs allow only owner/system/admin;
  * retained previously published objects keep their own DACL, so the store name alone does not
@@ -170,8 +170,8 @@ private:
 
 // Creates/reuses a current-owner restricted transaction store, refusing unsafe existing objects.
 // For an absent target, derives volume from its existing parent; it never creates target/parents.
-// Prefer recoveryRoot when on target volume; otherwise use a per-user sibling of workspaceRoot.
-// With no workspaceRoot the fallback is adjacent to target (caller must exclude it from project
+// Prefer recoveryRoot when on target volume; otherwise use a per-user, per-workspace sibling of
+// workspaceRoot. With no workspaceRoot the fallback is adjacent to target (caller must exclude it
 // indexing/VCS). No privileges or existing unsafe directory ACL/mode are changed. O(path depth).
 [[nodiscard]] Result<std::string> ensurePrivateTransactionStore(std::string_view target,
                                                                 std::string_view preferredRecoveryRoot,

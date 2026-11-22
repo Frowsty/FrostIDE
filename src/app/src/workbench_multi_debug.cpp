@@ -50,7 +50,7 @@ void applyEnvironment(debug::DebugTarget& target, const std::vector<run::Environ
     }
 }
 Result<void> prepareTasks(run::RunManager& runs, const run::RunConfiguration& configuration, debug::DebugTarget target,
-                          std::stop_token stop, Prepared done, QObject* context,
+                          const std::stop_token& stop, Prepared done, QObject* context,
                           std::function<Result<void>()> admission) {
     if (stop.stop_requested())
         return fail(ErrorCode::Cancelled, "The debugger preparation was cancelled");
@@ -147,7 +147,8 @@ Result<void> Workbench::startCompoundDebug(const run::RunConfiguration& configur
         return current.trusted && current.revision == revision;
     };
     auto prepare = [this, self, root, revision = trust.revision](const run::RunConfiguration& member,
-                                                                 std::stop_token stop, Prepared done) -> Result<void> {
+                                                                 const std::stop_token& stop,
+                                                                 Prepared done) -> Result<void> {
         if (!self || stop.stop_requested())
             return fail(ErrorCode::Cancelled, "The compound debugger preparation was cancelled");
         auto finalAdmission = [store = &m_services.trust, root, revision, stop]() -> Result<void> {
@@ -252,7 +253,7 @@ Result<void> Workbench::startCompoundDebug(const run::RunConfiguration& configur
                     },
                     Qt::QueuedConnection);
             };
-            auto accepted = m_runService->debug(*project, std::move(handlers));
+            auto accepted = m_runService->debug(project, std::move(handlers));
             if (!accepted)
                 return std::unexpected(accepted.error());
             *cancellation = std::make_unique<Cancellation>(
@@ -294,7 +295,7 @@ Result<void> Workbench::startCompoundDebug(const run::RunConfiguration& configur
                         return current.pid == process.pid && current.executablePath == process.executablePath;
                     });
                 };
-                return sessions.attachTarget(target, std::move(factory), std::move(arguments), std::move(live), group);
+                return sessions.attachTarget(target, std::move(factory), std::move(arguments), live, group);
             };
             done(std::move(prepared));
             return {};
@@ -302,7 +303,7 @@ Result<void> Workbench::startCompoundDebug(const run::RunConfiguration& configur
         return fail(ErrorCode::Unsupported, "This debug configuration needs its engine adapter provider");
     };
     auto saveAndPrepare = [this, self, admitted, work = std::move(prepare)](const run::RunConfiguration& member,
-                                                                            std::stop_token stop,
+                                                                            const std::stop_token& stop,
                                                                             Prepared done) -> Result<void> {
         saveAll([self, admitted, work, member, stop, done = std::move(done)](Result<void> saved) mutable {
             if (!self)

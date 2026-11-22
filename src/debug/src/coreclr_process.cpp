@@ -67,7 +67,7 @@ Result<std::uint64_t> processStart(std::uint32_t pid, const std::string& executa
 #endif
 } // namespace
 
-Result<std::function<Result<void>()>> coreClrProcessAdmission(std::uint32_t pid, std::string executable) {
+Result<std::function<Result<void>()>> coreClrProcessAdmission(std::uint32_t pid, const std::string& executable) {
     if (!pid || !io::isAbsolutePath(executable) || executable.find('\0') != std::string::npos)
         return fail(ErrorCode::InvalidArgument, "CoreCLR attach requires a PID and absolute process image");
 #ifdef _WIN32
@@ -100,7 +100,7 @@ Result<std::function<Result<void>()>> coreClrProcessAdmission(std::uint32_t pid,
     auto start = processStart(pid, executable);
     if (!start)
         return std::unexpected(std::move(start.error()));
-    std::function<Result<void>()> admission = [pid, executable = std::move(executable), start = *start] {
+    std::function<Result<void>()> admission = [pid, executable, start = *start] {
         auto current = processStart(pid, executable);
         if (!current)
             return Result<void>(std::unexpected(std::move(current.error())));

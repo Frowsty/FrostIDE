@@ -170,7 +170,7 @@ TEST_F(DebugSessionsTest, PrivateNativeLaunchRejectsCustomAndConfiguredAdaptersB
     options.trust = trust.get();
     options.fs = &fs;
     options.launcher = &launcher;
-    options.lldbDapSetting = [external] { return external; };
+    options.lldbDapSetting = [external] { return std::string(external); };
     DebugController configured(points, std::move(options));
     const auto result = configured.startNativeEngineTarget(native, sink, {}, admission);
     ASSERT_FALSE(result);

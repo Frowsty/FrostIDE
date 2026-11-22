@@ -4,9 +4,8 @@
 #include "frost/debug/lua_debug_endpoint.hpp"
 
 namespace frost::debug::detail {
-[[nodiscard]] std::unique_ptr<IDapTransport> makeLuaDapTransport(std::unique_ptr<io::LoopbackStream> stream,
-                                                                 LuaDebugIdentity identity, std::string credential,
-                                                                 LuaDebugAdmission admission, std::stop_token stop,
-                                                                 std::int64_t lastServerSequence,
-                                                                 LuaDebugTransportCallbacks callbacks);
+[[nodiscard]] std::unique_ptr<IDapTransport>
+makeLuaDapTransport(std::unique_ptr<io::LoopbackStream> stream, LuaDebugIdentity identity, std::string credential,
+                    LuaDebugAdmission admission, const std::stop_token& stop, std::int64_t lastServerSequence,
+                    LuaDebugTransportCallbacks callbacks);
 } // namespace frost::debug::detail

@@ -19,13 +19,16 @@ TEST(NatvisPackReal, OriginalPackProjectsNativeFieldsAndRawViewDoesNotUseTheProj
     ASSERT_TRUE(peer.start(FROST_DBGENG_ADAPTER_PATH));
     DbgEngTarget target;
     target.native.program = *program;
-    auto environment = native_test::pinnedMsvcEnvironment();
-    ASSERT_TRUE(environment) << environment.error().describe();
-    const auto install = std::ranges::find_if(
-        *environment, [](const auto& entry) { return native_test::sameText(entry.first, "VSINSTALLDIR"); });
-    ASSERT_NE(install, environment->end());
-    ASSERT_TRUE(install->second);
-    const auto stl = io::joinPath(*install->second, "Common7/Packages/Debugger/Visualizers/stl.natvis");
+    auto instances = build::listVsInstances(io::realProcessLauncher(), io::realFileSystem());
+    ASSERT_TRUE(instances) << instances.error().describe();
+    const std::string pinned = FROST_PINNED_VC_TOOLS;
+    const auto install = std::ranges::find_if(*instances, [&](const build::VsInstance& instance) {
+        return io::realFileSystem()
+            .exists(instance.installationPath + "\\VC\\Tools\\MSVC\\" + pinned + "\\include")
+            .value_or(false);
+    });
+    ASSERT_NE(install, instances->end()) << "no Visual Studio instance has the pinned MSVC toolset " << pinned;
+    const auto stl = io::joinPath(install->installationPath, "Common7/Packages/Debugger/Visualizers/stl.natvis");
     ASSERT_TRUE(stl) << stl.error().describe();
     ASSERT_TRUE(io::realFileSystem().exists(*stl).value_or(false)) << *stl;
     const auto forwarded = scratch.join("forwarded.natvis");

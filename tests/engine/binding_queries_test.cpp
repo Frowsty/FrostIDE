@@ -12,15 +12,15 @@ namespace frost::engine {
 namespace {
 using rpc::Json;
 #ifdef _WIN32
-const std::string root = "C:/binding-project";
+constexpr const char* root = "C:/binding-project";
 #else
-const std::string root = "/binding-project";
+constexpr const char* root = "/binding-project";
 #endif
 std::string path(std::string_view name) { return io::joinPath(root, name).value(); }
 BindingProviderCapture native() { return {BindingLanguage::Native, "clangd-project", 3, lang::PositionEncoding::Utf8}; }
 BindingProviderCapture lua() { return {BindingLanguage::Lua, "luals-project", 9, lang::PositionEncoding::Utf16}; }
 
-BindingDocumentCapture capture(std::string file, std::string contents, std::int64_t version = 4) {
+BindingDocumentCapture capture(std::string_view file, std::string contents, std::int64_t version = 4) {
     return {path(file), text::TextBuffer::fromUtf8(std::move(contents)).value().snapshot(), version,
             BindingDocumentRole::UserSource};
 }

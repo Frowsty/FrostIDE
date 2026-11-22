@@ -8,7 +8,7 @@
 
 #include <utility>
 namespace frost::syntax {
-Result<LuaAstProjection> projectLuaSnapshot(text::Snapshot snapshot, const LuaAstLimits& limits) {
+Result<LuaAstProjection> projectLuaSnapshot(const text::Snapshot& snapshot, const LuaAstLimits& limits) {
     if (snapshot.size().value() > limits.maxBytes || limits.maxBytes > 8 * 1024 * 1024)
         return fail(ErrorCode::OutOfRange, "Lua source exceeds the AST byte budget");
     if (limits.stop.stop_requested())

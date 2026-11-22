@@ -10,6 +10,7 @@
 #include "clang/Lex/Lexer.h"
 #include "semantic_snapshot.hpp"
 
+#include <limits>
 #include <set>
 namespace frost::clang_engine {
 CreateUsageDiagnostics::CreateUsageDiagnostics(std::string p, std::string r, unsigned o)
@@ -64,6 +65,7 @@ public:
         return end.isFileID() && semantic::absolute(sm.getFilename(range.getBegin()), root) == path &&
                sm.getFileOffset(range.getBegin()) <= offset && offset < sm.getFileOffset(end);
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitRecoveryExpr(clang::RecoveryExpr* expression) {
         if (!covers(expression->getSourceRange()))
             return true;
@@ -87,6 +89,7 @@ public:
         }
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitCallExpr(clang::CallExpr* expression) {
         if (!covers(expression->getSourceRange()))
             return true;
@@ -191,7 +194,10 @@ std::optional<CreatedUsage> createFromUsage(clang::ASTUnit& ast, const llvm::jso
     if (!function || !function->doesThisDeclarationHaveABody() ||
         function->getTemplatedKind() != clang::FunctionDecl::TK_NonTemplate || function->isConstexpr())
         return refuse("Usage must belong to an ordinary non-template runtime function");
-    auto location = sm.getLocForStartOfFile(sm.getFileID(selected.call->getBeginLoc())).getLocWithOffset(offset);
+    if (offset > static_cast<unsigned>(std::numeric_limits<clang::SourceLocation::IntTy>::max()))
+        return refuse("Selection offset exceeds Clang source range");
+    auto location = sm.getLocForStartOfFile(sm.getFileID(selected.call->getBeginLoc()))
+                        .getLocWithOffset(static_cast<clang::SourceLocation::IntTy>(offset));
     location = clang::Lexer::GetBeginningOfToken(location, sm, context.getLangOpts());
     clang::Token token;
     if (clang::Lexer::getRawToken(location, token, sm, context.getLangOpts(), true) ||

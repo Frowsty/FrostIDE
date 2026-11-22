@@ -44,17 +44,18 @@ struct Fixture {
     QTemporaryDir directory;
     bool admitted = true;
     int calls = 0;
-    frost::app::AgentBridge bridge{[this] { return admitted; },
-                                   [this](const QString&, const QJsonObject&, frost::app::AgentBridge::Reply reply) {
-                                       ++calls;
-                                       reply({{"fixture", true}});
-                                   }};
+    frost::app::AgentBridge bridge{
+        [this] { return admitted; },
+        [this](const QString&, const QJsonObject&, const frost::app::AgentBridge::Reply& reply) {
+            ++calls;
+            reply({{"fixture", true}});
+        }};
     QJsonObject record() const {
         QFile file(QDir(directory.path()).filePath("ide/" + QString::number(bridge.port()) + ".lock"));
         EXPECT_TRUE(file.open(QIODevice::ReadOnly));
         return QJsonDocument::fromJson(file.readAll()).object();
     }
-    void connect(QTcpSocket& client, QByteArray extra = {}, QByteArray token = {}) {
+    void connect(QTcpSocket& client, const QByteArray& extra = {}, QByteArray token = {}) {
         if (token.isEmpty())
             token = record().value("authToken").toString().toLatin1();
         client.connectToHost(QHostAddress::LocalHost, bridge.port());

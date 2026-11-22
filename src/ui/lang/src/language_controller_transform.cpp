@@ -78,7 +78,7 @@ void LanguageController::showProviderTransformations(bool creation) {
     start<std::vector<fl::CodeActionItem>>(
         m_actionSlot,
         [&server = m_services.server, path, range, diagnostics](std::stop_token stop) {
-            return fl::requestCodeActions(server, path, range, diagnostics, stop);
+            return fl::requestCodeActions(server, path, range, diagnostics, std::move(stop));
         },
         [this, semantic, creation](Result<std::vector<fl::CodeActionItem>> result) {
             if (!result) {

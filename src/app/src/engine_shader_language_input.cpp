@@ -30,8 +30,8 @@ Result<std::pair<std::string, std::string>> virtualPath(io::IFileSystem& fs, std
     return std::pair{relative, *actual};
 }
 } // namespace
-Result<ShaderLanguageCapture> captureShaderLanguage(io::IFileSystem& fs, std::string root, std::string program,
-                                                    std::string query, const ShaderLanguageImages& images,
+Result<ShaderLanguageCapture> captureShaderLanguage(io::IFileSystem& fs, std::string root, const std::string& program,
+                                                    const std::string& query, const ShaderLanguageImages& images,
                                                     std::string method, size_t offset) {
     auto owning = virtualPath(fs, root, program), active = virtualPath(fs, root, query);
     if (!owning)

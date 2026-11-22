@@ -26,14 +26,14 @@ RunConfiguration config() {
     c.environment = {{"LUA_PATH", "custom/?.lua"}};
     return c;
 }
-std::string absolute(std::string leaf) {
+std::string absolute(const std::string& leaf) {
 #ifdef _WIN32
     return "C:/scratch/" + leaf;
 #else
     return "/scratch/" + leaf;
 #endif
 }
-std::string junit(std::string cases = R"(<testcase classname="[TestFunctions]" name="testOne" time="0.001"/>)") {
+std::string junit(const std::string& cases = R"(<testcase classname="[TestFunctions]" name="testOne" time="0.001"/>)") {
     return std::string(
                R"(<testsuites><testsuite tests="1" errors="0" failures="0" skipped="0"><properties><property name="LuaUnit Version" value="3.5"/></properties>)") +
            cases + "</testsuite></testsuites>";

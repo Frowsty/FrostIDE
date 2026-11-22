@@ -32,7 +32,11 @@ namespace frost::test {
  */
 class EngineBuildLock {
 public:
-    explicit EngineBuildLock(const std::string& path, std::chrono::seconds timeout = std::chrono::hours(2)) {
+    explicit EngineBuildLock(const std::string& path, std::chrono::seconds timeout = std::chrono::hours(2))
+#ifndef _WIN32
+        : m_fd(::open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0644))
+#endif
+    {
         const auto deadline = std::chrono::steady_clock::now() + timeout;
 #ifdef _WIN32
         const int length = MultiByteToWideChar(CP_UTF8, 0, path.data(), static_cast<int>(path.size()), nullptr, 0);
@@ -53,7 +57,6 @@ public:
             std::this_thread::sleep_for(std::chrono::seconds(1)); // Another process holds it; it signals nothing.
         }
 #else
-        m_fd = ::open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0644);
         if (m_fd < 0)
             return;
         for (;;) {

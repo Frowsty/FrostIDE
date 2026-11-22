@@ -57,7 +57,7 @@ Result<std::string> appendCMakeKitPreset(std::string original, std::string_view 
 }
 
 void showCMakeKitDialog(io::IFileSystem& fs, settings::SettingsStore& store, build::CMakeService& service,
-                        QWidget& parent, std::function<bool()> stillCurrent) {
+                        QWidget& parent, const std::function<bool()>& stillCurrent) {
     const auto root = service.sourceDirectory();
     const auto generation = service.profileGeneration();
     if (root.empty() || service.state() != build::BuildState::Idle)

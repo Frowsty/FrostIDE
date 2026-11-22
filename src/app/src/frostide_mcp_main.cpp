@@ -39,7 +39,7 @@ std::optional<std::string> environmentVariable(const char* name) {
 }
 #endif
 
-frost::Result<Json> discover(std::string path, std::string root) {
+frost::Result<Json> discover(const std::string& path, std::string root) {
     auto& fs = frost::io::realFileSystem();
     if (root.empty()) {
         std::error_code error;
@@ -140,7 +140,7 @@ int run(const std::vector<std::string>& args) {
     }
     std::mutex output;
     std::atomic<bool> initialized{false};
-    std::jthread notifications([&](std::stop_token stop) {
+    std::jthread notifications([&](const std::stop_token& stop) {
         std::int64_t revision = 0;
         while (!stop.stop_requested()) {
             if (initialized.load()) {

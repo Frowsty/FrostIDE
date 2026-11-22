@@ -16,7 +16,8 @@ struct ShaderLanguageInput {
 inline constexpr std::size_t kShaderMaxIncludeRoots = 32;
 inline constexpr std::size_t kShaderMaxCandidates = 64;
 [[nodiscard]] Result<Json> queryShaderSource(io::IFileSystem& fs, const ShaderLanguageInput& input,
-                                             std::string_view method, const Json& params, std::stop_token stop = {});
+                                             std::string_view method, const Json& params,
+                                             const std::stop_token& stop = {});
 class ShaderSourceService final : public ILspRequester {
 public:
     // Caller captures source/root identities on owner thread. fs/scheduler outlive request tasks;

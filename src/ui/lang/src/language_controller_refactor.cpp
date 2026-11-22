@@ -173,8 +173,9 @@ void LanguageController::onRenameAccepted(const QString& name) {
     ordinary();
 }
 
-void LanguageController::performAcceptedRename(std::string path, fl::LspPosition position, std::string oldName,
-                                               std::string newName, bool searchComments, bool preview) {
+void LanguageController::performAcceptedRename(const std::string& path, fl::LspPosition position,
+                                               const std::string& oldName, const std::string& newName,
+                                               bool searchComments, bool preview) {
     const fl::PositionEncoding renameEncoding = m_services.server.encoding();
     start<fl::WorkspaceEdit>(
         m_renameSlot,

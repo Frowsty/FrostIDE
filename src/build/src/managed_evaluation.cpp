@@ -52,11 +52,11 @@ Result<io::ProcessSpec> managedProjectEvaluationSpec(const ManagedProjectRequest
                          "MSBuildAllProjects,MSBuildToolsPath,MSBuildProjectExtensionsPath,UsingMicrosoftNETSdkWeb,"
                          "UseWPF,UseWindowsForms,UseMaui,TargetPlatformIdentifier,TargetPlatformVersion,RootNamespace,"
                          "RazorLangVersion,RazorCompileOnBuild,RazorConfiguration,StaticWebAssetProjectMode";
-    spec->arguments.push_back(
+    spec->arguments.emplace_back(
         "-getItem:Compile,ProjectReference,PackageReference,Analyzer,AdditionalFiles,"
         "EditorConfigFiles,Reference,PackageVersion,Page,ApplicationDefinition,AvaloniaXaml,MauiXaml,"
         "RazorGenerate,RazorComponent,Content");
-    spec->arguments.push_back("-property:BuildProjectReferences=false");
+    spec->arguments.emplace_back("-property:BuildProjectReferences=false");
     return spec;
 }
 Result<ManagedProjectEvaluation> parseManagedProjectEvaluation(const ManagedProjectRequest& request,

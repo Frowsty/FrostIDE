@@ -48,7 +48,7 @@ struct CppCompilerInput {
 // No publication occurs here. Caller additionally guards CDB/project/open-document generations.
 [[nodiscard]] Result<void> validateCppIndexInputs(io::IFileSystem& fs, const CppIndexUnit& unit,
                                                   std::span<const CppRenameOverlay> overlays,
-                                                  std::stop_token stop = {});
+                                                  const std::stop_token& stop = {});
 
 // One owning actor uses this move-only store on one worker at a time. All callbacks/queries are
 // synchronous worker operations; no Qt or LLVM objects cross this interface. Publication is one
@@ -62,19 +62,19 @@ public:
     [[nodiscard]] Result<std::size_t> storedCommands(std::string_view databaseSha256);
     [[nodiscard]] Result<CppIndexQuery> symbols(std::string_view prefix, std::string_view databaseSha256,
                                                 std::string_view configuration = {}, std::size_t limit = 200,
-                                                std::stop_token stop = {});
+                                                const std::stop_token& stop = {});
     [[nodiscard]] Result<CppIndexQuery> occurrences(std::string_view usr, std::string_view databaseSha256,
                                                     std::string_view configuration = {}, std::size_t limit = 1000,
-                                                    std::stop_token stop = {});
+                                                    const std::stop_token& stop = {});
     [[nodiscard]] Result<Json> relations(std::string_view usr, std::string_view databaseSha256,
                                          std::string_view configuration = {}, std::size_t limit = 1000,
-                                         std::stop_token stop = {});
+                                         const std::stop_token& stop = {});
 
 private:
     explicit CppIndexStore(storage::Database database) : database(std::move(database)) {}
     storage::Database database;
     [[nodiscard]] Result<CppIndexQuery> query(std::string_view value, std::string_view databaseSha256,
                                               std::string_view configuration, std::size_t limit, bool usages,
-                                              std::stop_token stop);
+                                              const std::stop_token& stop);
 };
 } // namespace frost::lang

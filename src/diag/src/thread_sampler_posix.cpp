@@ -31,7 +31,6 @@
 #include <mutex>
 
 #include <semaphore.h>
-#include <signal.h>
 #include <ucontext.h>
 #include <unistd.h>
 #include <unwind.h>

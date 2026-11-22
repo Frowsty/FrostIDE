@@ -148,12 +148,14 @@ class Functions final : public clang::RecursiveASTVisitor<Functions> {
 
 public:
     explicit Functions(AnalyzerResults& o) : output(o) {}
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool TraverseDecl(clang::Decl* declaration) {
         if (declaration && declaration->getLocation().isValid() &&
             output.context.getSourceManager().isInSystemHeader(declaration->getLocation()))
             return true;
         return clang::RecursiveASTVisitor<Functions>::TraverseDecl(declaration);
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitFunctionDecl(clang::FunctionDecl* declaration) {
         if (declaration->doesThisDeclarationHaveABody() && !declaration->isDependentContext() &&
             !declaration->isImplicit() && seen.insert(declaration).second)

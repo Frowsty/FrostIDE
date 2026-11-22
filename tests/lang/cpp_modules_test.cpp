@@ -11,11 +11,12 @@
 #include <gtest/gtest.h>
 namespace frost::lang {
 namespace {
-const std::string root = io::kNativePathStyle == io::PathStyle::Windows ? "C:/module build" : "/module build";
-const std::string database = io::joinPath(root, "compile_commands.json").value();
-const std::string compiler = io::joinPath(root, "clang++").value();
+std::string rootPath() { return io::kNativePathStyle == io::PathStyle::Windows ? "C:/module build" : "/module build"; }
+std::string databasePath() { return io::joinPath(rootPath(), "compile_commands.json").value(); }
+std::string compilerPath() { return io::joinPath(rootPath(), "clang++").value(); }
 
 Json command(Json argv) {
+    const auto root = rootPath();
     return Json::object()
         .set("directory", root)
         .set("file", io::joinPath(root, "source.cpp").value())
@@ -23,9 +24,10 @@ Json command(Json argv) {
 }
 
 CppModuleScanRequest requestFor(const Json& entries) {
+    const auto root = rootPath();
     CppModuleScanRequest request;
     request.scanner = io::joinPath(root, "clang-scan-deps").value();
-    request.privateDatabasePath = database;
+    request.privateDatabasePath = databasePath();
     request.databaseBytes = entries.dump();
     request.workingDirectory = root;
     request.trusted = true;
@@ -70,6 +72,9 @@ TEST(CppModules, AmbiguousProviderNeverInventsNavigation) {
 }
 
 TEST(CppModules, AcceptsExplicitOutputAndClangClObjectFlagWithoutChangingTheCapturedDatabase) {
+    const auto root = rootPath();
+    const auto database = databasePath();
+    const auto compiler = compilerPath();
     const auto clangCl = io::joinPath(root, "clang-cl").value();
     const auto clOutput = io::joinPath(root, "file.obj").value();
     const auto explicitOutput = io::joinPath(root, "explicit.pcm").value();
@@ -101,6 +106,9 @@ TEST(CppModules, AcceptsExplicitOutputAndClangClObjectFlagWithoutChangingTheCapt
 }
 
 TEST(CppModules, RejectsMissingAmbiguousAndRepeatedOutputsBeforeStartingTheScanner) {
+    const auto root = rootPath();
+    const auto database = databasePath();
+    const auto compiler = compilerPath();
     const auto duplicate = command(Json::array({compiler, "-c", "source.cpp", "-o", "result.o"}));
     for (const auto& entries : {Json::array({command(Json::array({compiler, "-c", "source.cpp"}))}),
                                 Json::array({command(Json::array({compiler, "-o", "one.o", "-o", "two.o"}))}),
@@ -118,6 +126,9 @@ TEST(CppModules, RejectsMissingAmbiguousAndRepeatedOutputsBeforeStartingTheScann
 }
 
 TEST(CppModules, RefusesScannerReportThatOmitsACapturedOutput) {
+    const auto root = rootPath();
+    const auto database = databasePath();
+    const auto compiler = compilerPath();
     const auto request = requestFor(Json::array(
         {command(Json::array({compiler, "-o", "one.o"})), command(Json::array({compiler, "-o", "two.o"}))}));
     ManualClock clock;

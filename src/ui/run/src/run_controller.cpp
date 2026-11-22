@@ -651,7 +651,7 @@ Result<build::RunId> RunController::runNative(const run::RunConfiguration& confi
                 return fail(ErrorCode::PermissionDenied, "FrostEngine launch has no physical project resolver");
             }
             const run::LaunchPlan original = plan;
-            auto transformed = resolve(std::move(plan), stop);
+            auto transformed = resolve(std::move(plan), std::move(stop));
             if (!transformed) {
                 return std::unexpected(std::move(transformed.error()));
             }

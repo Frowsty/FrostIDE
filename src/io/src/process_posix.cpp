@@ -41,6 +41,7 @@
 #include <csignal>
 #include <cstdio>
 #include <format>
+#include <optional>
 #include <thread>
 #include <tuple>
 #include <vector>
@@ -142,6 +143,50 @@ std::string readProcFile(const std::string& path) {
     }
 }
 
+#ifdef __linux__
+struct ProcStatTail {
+    char state = '?';
+    long parent = 0;
+    long processGroup = 0;
+    long session = 0;
+};
+
+// Parses the fields after ") " in /proc/<pid>/stat: "state ppid pgrp session ...".
+std::optional<ProcStatTail> parseProcStatTail(std::string_view tail) noexcept {
+    const auto skipSpaces = [](std::string_view& text) {
+        while (!text.empty() && text.front() == ' ') {
+            text.remove_prefix(1);
+        }
+    };
+    const auto nextLong = [&](long& value) {
+        skipSpaces(tail);
+        if (tail.empty()) {
+            return false;
+        }
+        const auto [ptr, ec] = std::from_chars(tail.data(), tail.data() + tail.size(), value);
+        if (ec != std::errc{} || ptr == tail.data()) {
+            return false;
+        }
+        tail.remove_prefix(static_cast<std::size_t>(ptr - tail.data()));
+        return tail.empty() || tail.front() == ' ' || tail.front() == '\n';
+    };
+    skipSpaces(tail);
+    if (tail.empty()) {
+        return std::nullopt;
+    }
+    ProcStatTail parsed;
+    parsed.state = tail.front();
+    tail.remove_prefix(1);
+    if (tail.empty() || tail.front() != ' ') {
+        return std::nullopt;
+    }
+    if (!nextLong(parsed.parent) || !nextLong(parsed.processGroup) || !nextLong(parsed.session)) {
+        return std::nullopt;
+    }
+    return parsed;
+}
+#endif
+
 // The live (not zombie) processes whose process group is `group`, from /proc (Linux only).
 Result<std::vector<ContainedProcess>> processGroupMembers(pid_t group) {
 #ifdef __linux__
@@ -164,12 +209,8 @@ Result<std::vector<ContainedProcess>> processGroupMembers(pid_t group) {
         if (open == std::string::npos || close == std::string::npos || close < open) {
             continue;
         }
-        char state = '?';
-        long parent = 0;
-        long processGroup = 0;
-        const std::string rest = stat.substr(close + 1);
-        if (std::sscanf(rest.c_str(), " %c %ld %ld", &state, &parent, &processGroup) != 3 || state == 'Z' ||
-            processGroup != static_cast<long>(group)) {
+        const auto parsed = parseProcStatTail(std::string_view(stat).substr(close + 1));
+        if (!parsed || parsed->state == 'Z' || parsed->processGroup != static_cast<long>(group)) {
             continue;
         }
         std::string image = stat.substr(open + 1, close - open - 1); // comm, at most 15 bytes.
@@ -909,12 +950,9 @@ void killSessionTree(pid_t leader) {
             if (close == std::string::npos) {
                 continue; // Gone meanwhile.
             }
-            char state = '?';
-            long parent = 0;
-            long group = 0;
-            long session = 0;
-            if (std::sscanf(stat.c_str() + close + 1, " %c %ld %ld %ld", &state, &parent, &group, &session) != 4 ||
-                state == 'Z' || state == 'X' || session != static_cast<long>(leader)) {
+            const auto parsed = parseProcStatTail(std::string_view(stat).substr(close + 1));
+            if (!parsed || parsed->state == 'Z' || parsed->state == 'X' ||
+                parsed->session != static_cast<long>(leader)) {
                 continue;
             }
             static_cast<void>(::kill(pid, SIGKILL));

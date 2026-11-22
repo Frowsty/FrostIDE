@@ -48,7 +48,7 @@ ShaderSourceKind shaderSourceKind(std::string_view path) noexcept {
     return oneOf(ext, {".hlsl", ".hlsli", ".fx", ".cginc", ".compute"}) ? ShaderSourceKind::Hlsl
                                                                         : ShaderSourceKind::None;
 }
-ShaderSourceScan scanShaderSource(std::string_view s, ShaderSourceKind kind, std::stop_token stop) {
+ShaderSourceScan scanShaderSource(std::string_view s, ShaderSourceKind kind, const std::stop_token& stop) {
     ShaderSourceScan out;
     if (kind == ShaderSourceKind::None)
         return out;
@@ -216,55 +216,54 @@ ShaderSourceScan scanShaderSource(std::string_view s, ShaderSourceKind kind, std
                 add(start, i, HighlightKind::BuiltinType);
             else if (word == "true" || word == "false")
                 add(start, i, HighlightKind::Boolean);
-            else if (program && oneOf(word, {"break",
-                                             "case",
-                                             "cbuffer",
-                                             "centroid",
-                                             "class",
-                                             "column_major",
-                                             "const",
-                                             "continue",
-                                             "default",
-                                             "discard",
-                                             "do",
-                                             "else",
-                                             "export",
-                                             "extern",
-                                             "for",
-                                             "groupshared",
-                                             "if",
-                                             "in",
-                                             "inline",
-                                             "inout",
-                                             "interface",
-                                             "linear",
-                                             "nointerpolation",
-                                             "noperspective",
-                                             "out",
-                                             "precise",
-                                             "register",
-                                             "return",
-                                             "row_major",
-                                             "sample",
-                                             "shared",
-                                             "snorm",
-                                             "static",
-                                             "struct",
-                                             "switch",
-                                             "tbuffer",
-                                             "typedef",
-                                             "uniform",
-                                             "unorm",
-                                             "volatile",
-                                             "while"}))
-                add(start, i, HighlightKind::Keyword);
-            else if (!program &&
-                     oneOf(word,
-                           {"Shader",       "SubShader", "Properties", "Pass",        "Tags",    "LOD",    "Fallback",
-                            "CustomEditor", "UsePass",   "Name",       "Blend",       "BlendOp", "ZWrite", "ZTest",
-                            "Cull",         "ColorMask", "Offset",     "Stencil",     "Ref",     "Comp",   "Fail",
-                            "ZFail",        "ReadMask",  "WriteMask",  "AlphaToMask", "Color",   "Float",  "Range",
-                            "Int",          "Integer",   "Vector",     "Cube"}))
+            else if ((program && oneOf(word, {"break",
+                                              "case",
+                                              "cbuffer",
+                                              "centroid",
+                                              "class",
+                                              "column_major",
+                                              "const",
+                                              "continue",
+                                              "default",
+                                              "discard",
+                                              "do",
+                                              "else",
+                                              "export",
+                                              "extern",
+                                              "for",
+                                              "groupshared",
+                                              "if",
+                                              "in",
+                                              "inline",
+                                              "inout",
+                                              "interface",
+                                              "linear",
+                                              "nointerpolation",
+                                              "noperspective",
+                                              "out",
+                                              "precise",
+                                              "register",
+                                              "return",
+                                              "row_major",
+                                              "sample",
+                                              "shared",
+                                              "snorm",
+                                              "static",
+                                              "struct",
+                                              "switch",
+                                              "tbuffer",
+                                              "typedef",
+                                              "uniform",
+                                              "unorm",
+                                              "volatile",
+                                              "while"})) ||
+                     (!program &&
+                      oneOf(word,
+                            {"Shader",       "SubShader", "Properties", "Pass",        "Tags",    "LOD",    "Fallback",
+                             "CustomEditor", "UsePass",   "Name",       "Blend",       "BlendOp", "ZWrite", "ZTest",
+                             "Cull",         "ColorMask", "Offset",     "Stencil",     "Ref",     "Comp",   "Fail",
+                             "ZFail",        "ReadMask",  "WriteMask",  "AlphaToMask", "Color",   "Float",  "Range",
+                             "Int",          "Integer",   "Vector",     "Cube"})))
                 add(start, i, HighlightKind::Keyword);
             continue;
         }

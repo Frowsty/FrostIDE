@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <map>
+#include <ranges>
 namespace frost::app {
 namespace {
 struct OpenLuaInput {
@@ -36,7 +37,7 @@ struct PreparedLuaModule {
 void sortEntries(std::vector<io::DirEntry>& entries) { std::ranges::sort(entries, {}, &io::DirEntry::name); }
 Result<PreparedLuaModule> captureModule(io::IFileSystem& fs, lang::LuaModuleRenameRequest request,
                                         const std::vector<OpenLuaInput>& open, lang::Json configuration,
-                                        std::stop_token stop) {
+                                        const std::stop_token& stop) {
     PreparedLuaModule captured;
     captured.plan.label = "Rename Lua module and resolved workspace require users";
     std::map<std::string, RefactoringInputSnapshot> inputs;
@@ -201,9 +202,9 @@ Result<PreparedLuaModule> captureModule(io::IFileSystem& fs, lang::LuaModuleRena
     }
     for (const auto& file : proposal->files) {
         auto after = file.original.text();
-        for (auto edit = file.edits.rbegin(); edit != file.edits.rend(); ++edit)
-            after.replace(edit->range.begin.value(), edit->range.end.value() - edit->range.begin.value(),
-                          edit->replacement);
+        for (const auto& edit : std::views::reverse(file.edits))
+            after.replace(edit.range.begin.value(), edit.range.end.value() - edit.range.begin.value(),
+                          edit.replacement);
         auto replacement = text::Document::fromUtf8(std::move(after));
         if (!replacement)
             return std::unexpected(replacement.error());

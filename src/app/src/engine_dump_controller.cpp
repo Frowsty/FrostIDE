@@ -97,7 +97,7 @@ struct EngineDumpWorkBatch::State {
 EngineDumpWorkBatch::EngineDumpWorkBatch(std::function<void(std::string)> cleanup)
     : m_state(std::make_shared<State>()) {
     m_state->pool.setMaxThreadCount(1);
-    m_state->cleanup = cleanup ? std::move(cleanup) : [](std::string path) {
+    m_state->cleanup = cleanup ? std::move(cleanup) : [](const std::string& path) {
         auto removed = cleanPrivateDirectory(path);
         if (!removed)
             log::warn("debug", "Private crash cache cleanup failed: {}", removed.error().message());

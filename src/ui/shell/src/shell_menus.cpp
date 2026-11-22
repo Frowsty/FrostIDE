@@ -15,6 +15,7 @@
 #include <QMenuBar>
 
 #include <array>
+#include <ranges>
 
 namespace frost::ui {
 
@@ -382,10 +383,10 @@ void ShellMenus::refresh() {
             refreshItem(item, context);
         }
         // Submenus first (innermost last added), then the menu itself.
-        for (auto it = menu.submenuActions.rbegin(); it != menu.submenuActions.rend(); ++it) {
-            QMenu* submenu = (*it)->menu();
+        for (QAction* submenuAction : std::views::reverse(menu.submenuActions)) {
+            QMenu* submenu = submenuAction->menu();
             tidySeparators(*submenu);
-            (*it)->setVisible(hasVisibleItem(*submenu));
+            submenuAction->setVisible(hasVisibleItem(*submenu));
         }
         tidySeparators(*menu.menu);
         menu.menu->menuAction()->setVisible(hasVisibleItem(*menu.menu));

@@ -44,18 +44,16 @@ DiffColors DiffColors::current() {
 
 DiffViewer::DiffViewer(QWidget* parent, EditorServices services)
     : QWidget(parent), m_leftTitle(new QLabel(this)), m_rightTitle(new QLabel(this)),
-      m_keys(standaloneRouting(services)), m_leftDocument(std::make_unique<text::Document>(text::TextBuffer{})),
-      m_rightDocument(std::make_unique<text::Document>(text::TextBuffer{})), m_left(new EditorView(
-                                                                                 *m_leftDocument, "diff-left.cpp",
-                                                                                 [&] {
-                                                                                     if (m_keys)
-                                                                                         services.keys = m_keys.get();
-                                                                                     return services;
-                                                                                 }(),
-                                                                                 {}, this)),
-      m_right(new EditorView(*m_rightDocument, "diff-right.cpp", services, {}, this)),
+      m_keys(standaloneRouting(services)), m_services([&] {
+          if (m_keys)
+              services.keys = m_keys.get();
+          return std::move(services);
+      }()),
+      m_leftDocument(std::make_unique<text::Document>(text::TextBuffer{})),
+      m_rightDocument(std::make_unique<text::Document>(text::TextBuffer{})),
+      m_left(new EditorView(*m_leftDocument, "diff-left.cpp", m_services, {}, this)),
+      m_right(new EditorView(*m_rightDocument, "diff-right.cpp", m_services, {}, this)),
       m_apply(new QPushButton(tr("Apply Working Copy"), this)), m_status(new QLabel(this)) {
-    m_services = services;
     setObjectName(QStringLiteral("diffViewer"));
     auto* layout = new QGridLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);

@@ -19,6 +19,7 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <ranges>
 #include <utility>
 
 namespace frost::ui {
@@ -154,8 +155,8 @@ void NotificationCenter::layoutBalloons() {
     }
     // Newest at the bottom, older ones above it.
     int bottom = m_host->height() - kBalloonMargin;
-    for (auto it = m_balloons.rbegin(); it != m_balloons.rend(); ++it) {
-        NotificationBalloon* balloon = it->data();
+    for (const auto& entry : std::views::reverse(m_balloons)) {
+        NotificationBalloon* balloon = entry.data();
         if (balloon == nullptr) {
             continue;
         }
@@ -302,15 +303,15 @@ void NotificationLogView::showEvent(QShowEvent* event) {
 void NotificationLogView::rebuild() {
     m_list->clear();
     const auto& log = m_center.log();
-    for (auto it = log.rbegin(); it != log.rend(); ++it) {
-        const Notification& n = it->notification;
-        QString line = it->time.toString(QStringLiteral("HH:mm")) + QStringLiteral("  ") + n.title;
+    for (const auto& entry : std::views::reverse(log)) {
+        const Notification& n = entry.notification;
+        QString line = entry.time.toString(QStringLiteral("HH:mm")) + QStringLiteral("  ") + n.title;
         if (!n.text.isEmpty()) {
             line += QStringLiteral("\n") + n.text;
         }
         auto* item = new QListWidgetItem(shell_detail::themedIcon(kindIcon(n.kind)), line, m_list);
         QFont font = item->font();
-        font.setBold(!it->read);
+        font.setBold(!entry.read);
         item->setFont(font);
     }
 }

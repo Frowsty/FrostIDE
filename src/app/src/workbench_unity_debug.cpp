@@ -300,9 +300,9 @@ void Workbench::startUnityDebug(bool rebind) {
             if (!admitted())
                 return fail(ErrorCode::Cancelled, "Unity debug admission was revoked");
             return debug::mono::BinaryLoopback::connect(
-                port, deadline, stop,
+                port, deadline, std::move(stop),
                 [peer](std::uint16_t local, std::uint16_t remote, debug::mono::MonoDeadline until,
-                       std::stop_token token) { return peer->verify(local, remote, until, token); });
+                       const std::stop_token& token) { return peer->verify(local, remote, until, token); });
         };
         debug::DebugTarget target;
         target.name = selection.player ? "Unity Mono Player" : "Unity Editor Mono";

@@ -60,11 +60,13 @@ public:
     bool safe = true;
     bool portable = true; // No transplanted type names, sizeof/lookups, calls or implicit object state.
     std::vector<clang::DeclRefExpr*> references;
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitStmt(clang::Stmt* stmt) {
         safe &= stmt->getBeginLoc().isFileID() && stmt->getEndLoc().isFileID() && !llvm::isa<clang::LambdaExpr>(stmt) &&
                 !llvm::isa<clang::CXXThisExpr>(stmt);
         return safe;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitExpr(clang::Expr* expr) {
         portable &=
             llvm::isa<clang::IntegerLiteral, clang::FloatingLiteral, clang::CharacterLiteral, clang::CXXBoolLiteralExpr,
@@ -74,6 +76,7 @@ public:
                 !expr->getType().isVolatileQualified();
         return safe;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitDeclRefExpr(clang::DeclRefExpr* expr) {
         references.push_back(expr);
         return true;
@@ -95,22 +98,26 @@ public:
         return begin >= offset &&
                begin - offset < clang::Lexer::MeasureTokenLength(location, source.sm, source.context.getLangOpts());
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitExpr(clang::Expr* expr) {
         const auto r = source.range(expr->getSourceRange());
         if (r && r->first == begin && r->second == end && !llvm::isa<clang::ImplicitCastExpr>(expr))
             expression = expr;
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitVarDecl(clang::VarDecl* decl) {
         if (at(decl->getLocation()))
             variable = decl;
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitFunctionDecl(clang::FunctionDecl* decl) {
         if (at(decl->getLocation()))
             function = decl;
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitDeclRefExpr(clang::DeclRefExpr* expr) {
         if (at(expr->getLocation())) {
             if (auto* var = llvm::dyn_cast<clang::VarDecl>(expr->getDecl()))
@@ -120,6 +127,7 @@ public:
         }
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitCallExpr(clang::CallExpr* expr) {
         if (at(expr->getCallee()->getBeginLoc()))
             call = expr;
@@ -132,11 +140,13 @@ public:
     std::vector<clang::DeclRefExpr*> references;
     std::vector<clang::CallExpr*> calls;
     explicit Uses(const clang::ValueDecl* target) : target(target->getCanonicalDecl()) {}
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitDeclRefExpr(clang::DeclRefExpr* expr) {
         if (expr->getDecl()->getCanonicalDecl() == target)
             references.push_back(expr);
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitCallExpr(clang::CallExpr* expr) {
         if (expr->getDirectCallee() && expr->getDirectCallee()->getCanonicalDecl() == target)
             calls.push_back(expr);
@@ -176,6 +186,7 @@ bool identifier(llvm::StringRef name) {
 class Names final : public clang::RecursiveASTVisitor<Names> {
 public:
     std::set<std::string> values;
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitNamedDecl(clang::NamedDecl* decl) {
         if (!decl->getNameAsString().empty())
             values.insert(decl->getNameAsString());

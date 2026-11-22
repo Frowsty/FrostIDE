@@ -41,11 +41,11 @@ struct EngineInstanceRecord {
 [[nodiscard]] Result<std::vector<EngineInstallation>> locateEngineInstallations(io::IFileSystem& fs,
                                                                                 std::string_view projectRoot,
                                                                                 std::string_view configuredProgram = {},
-                                                                                std::stop_token stop = {});
+                                                                                const std::stop_token& stop = {});
 [[nodiscard]] Result<std::vector<EngineInstanceRecord>> listEngineInstances(io::IFileSystem& fs,
                                                                             std::string_view automationDirectory,
                                                                             std::string_view projectRoot,
-                                                                            std::stop_token stop = {});
+                                                                            const std::stop_token& stop = {});
 
 // Worker-only current physical identity check. A mismatch permanently revokes this captured
 // admission token; callers create another token only after an explicit project/session reset.

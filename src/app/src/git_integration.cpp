@@ -1193,8 +1193,8 @@ void GitIntegration::showResolveConflictsDialog() {
                             m_controller->info().gitDir,
                             absolute,
                             relative};
-        auto prepared =
-            sceneMergeInBackground(&dialog, [work](std::stop_token stop) { return prepareSceneMerge(work, stop); });
+        auto prepared = sceneMergeInBackground(
+            &dialog, [work](const std::stop_token& stop) { return prepareSceneMerge(work, stop); });
         if (!owner)
             return;
         if (!prepared) {
@@ -1203,14 +1203,14 @@ void GitIntegration::showResolveConflictsDialog() {
         }
         auto result = showSceneMerge(
             &dialog, std::move(*prepared),
-            [work](SceneMergeSnapshot snapshot, std::stop_token stop) {
+            [work](SceneMergeSnapshot snapshot, const std::stop_token& stop) {
                 return refreshSceneMerge(work, std::move(snapshot), stop);
             },
             [&, work, generation, absolute, relative](const SceneMergeSnapshot& snapshot) -> Result<void> {
                 if (!owner)
                     return fail(ErrorCode::Cancelled, "Merge owner was closed");
                 auto checked = sceneMergeInBackground(
-                    &dialog, [work, snapshot](std::stop_token stop) -> Result<SceneMergeSnapshot> {
+                    &dialog, [work, snapshot](const std::stop_token& stop) -> Result<SceneMergeSnapshot> {
                         if (auto valid = validateSceneMergeSources(work, snapshot, stop); !valid)
                             return std::unexpected(valid.error());
                         return snapshot;

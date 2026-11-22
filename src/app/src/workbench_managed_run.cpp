@@ -29,7 +29,7 @@ std::vector<run::RunConfiguration> Workbench::managedRunConfigurations() const {
     auto build = build::managedProjectBuildSpec(model->request);
     if (!build)
         return {};
-    build->arguments.push_back("--no-restore");
+    build->arguments.emplace_back("--no-restore");
     config.beforeLaunchTasks.push_back(
         {.program = build->executable, .arguments = build->arguments, .workingDirectory = build->workingDirectory});
     std::vector<run::RunConfiguration> configurations{config};
@@ -118,7 +118,7 @@ Workbench::managedRunPlanFor(const run::RunConfiguration& config) const {
         auto spec = build::managedProjectQuerySpec(model->request);
         if (!spec)
             return std::unexpected(spec.error());
-        auto receipt = io::runToCompletion(*launcher, *spec, {}, std::chrono::minutes(2), stop);
+        auto receipt = io::runToCompletion(*launcher, *spec, {}, std::chrono::minutes(2), std::move(stop));
         if (!receipt)
             return std::unexpected(receipt.error());
         if (receipt->exitCode != 0)

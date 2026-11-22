@@ -13,11 +13,13 @@
 #include <algorithm>
 namespace frost::lang {
 namespace {
+std::string root() {
 #ifdef _WIN32
-const std::string root = "C:/offline/";
+    return "C:/offline/";
 #else
-const std::string root = "/offline/";
+    return "/offline/";
 #endif
+}
 text::Snapshot snapshot(std::string source) { return text::TextBuffer::fromUtf8(std::move(source)).value().snapshot(); }
 Result<Json> complete(JsonSchemaService& service, const std::string& path, const text::Snapshot& text, ByteOffset at) {
     service.updateDocument(path, text);
@@ -27,7 +29,7 @@ Result<Json> complete(JsonSchemaService& service, const std::string& path, const
 }
 TEST(JsonSchema, NestedPresetErrorsUseExactCapturedValueRanges) {
     JsonSchemaService service;
-    const auto path = root + "CMakePresets.json";
+    const auto path = root() + "CMakePresets.json";
     const auto text = snapshot(R"({"version":"6","configurePresets":[{"name":false,"binaryDir":"build"}]})");
     service.updateDocument(path, text);
     const auto errors = service.snapshotIssues(path);
@@ -38,7 +40,7 @@ TEST(JsonSchema, NestedPresetErrorsUseExactCapturedValueRanges) {
 }
 TEST(JsonSchema, IncompleteNestedObjectCompletesPropertiesOffline) {
     JsonSchemaService service;
-    const auto path = root + "CMakePresets.json";
+    const auto path = root() + "CMakePresets.json";
     const auto text = snapshot(R"({"version":6,"configurePresets":[{)");
     const auto result = complete(service, path, text, text.size());
     ASSERT_TRUE(result);
@@ -50,7 +52,7 @@ TEST(JsonSchema, IncompleteNestedObjectCompletesPropertiesOffline) {
 }
 TEST(JsonSchema, LuaRuntimeEnumsReplaceWholeLiteralAndJsoncCommentsStayInert) {
     JsonSchemaService service;
-    const auto path = root + ".luarc.json";
+    const auto path = root() + ".luarc.json";
     const auto text = snapshot("{/* docs */\"runtime.version\":\"Lua 5.\",}");
     const auto result = complete(service, path, text, ByteOffset{text.size().value() - 3});
     ASSERT_TRUE(result);
@@ -61,7 +63,7 @@ TEST(JsonSchema, LuaRuntimeEnumsReplaceWholeLiteralAndJsoncCommentsStayInert) {
 }
 TEST(JsonSchema, EngineProfilesValidateKnownFieldsWithoutInventingUnknownComponentErrors) {
     JsonSchemaService service;
-    const auto path = root + "Game.frostproj";
+    const auto path = root() + "Game.frostproj";
     service.updateDocument(path, snapshot(R"({"General":{"Name":42},"CustomFutureEngineSetting":{"anything":true}})"));
     EXPECT_EQ(service.snapshotIssues(path).size(), 1U);
     service.updateDocument(path,
@@ -69,13 +71,13 @@ TEST(JsonSchema, EngineProfilesValidateKnownFieldsWithoutInventingUnknownCompone
     EXPECT_TRUE(service.snapshotIssues(path).empty());
     service.removeDocument(path);
     EXPECT_TRUE(service.snapshotIssues(path).empty());
-    EXPECT_FALSE(hasBundledJsonSchema(root + "unrelated.json"));
-    service.updateDocument(root + "asset.fmeta", snapshot(R"({"Handle":13957500353814115645,"Type":"Scene"})"));
-    EXPECT_TRUE(service.snapshotIssues(root + "asset.fmeta").empty());
+    EXPECT_FALSE(hasBundledJsonSchema(root() + "unrelated.json"));
+    service.updateDocument(root() + "asset.fmeta", snapshot(R"({"Handle":13957500353814115645,"Type":"Scene"})"));
+    EXPECT_TRUE(service.snapshotIssues(root() + "asset.fmeta").empty());
 }
 TEST(JsonSchema, InvalidPositionAndCancellationRefuseWithoutClampingIntoAnotherValue) {
     JsonSchemaService service;
-    const auto path = root + "CMakePresets.json";
+    const auto path = root() + "CMakePresets.json";
     service.updateDocument(path, snapshot("{}"));
     auto params = textDocumentPosition(path, LspPosition{999, 0}).value();
     EXPECT_FALSE(sched::syncWait(service.request("textDocument/completion", params)));
@@ -92,7 +94,7 @@ Json actualSchemas() {
 }
 TEST(JsonSchema, SelectedEngineSchemasStayWithinTheirProjectAndAreWithdrawn) {
     JsonSchemaService service;
-    const auto project = root + "Game";
+    const auto project = root() + "Game";
     ASSERT_TRUE(service.installEngineSchemas(project, actualSchemas()));
     const auto generation = service.schemaGeneration();
     EXPECT_TRUE(service.handles(project + "/Assets/a.fmat"));
@@ -110,7 +112,7 @@ TEST(JsonSchema, SelectedEngineSchemasStayWithinTheirProjectAndAreWithdrawn) {
 }
 TEST(JsonSchema, MalformedNestedEngineSchemaKeywordsNeverReplaceAdmittedShapes) {
     JsonSchemaService service;
-    const auto project = root + "Game";
+    const auto project = root() + "Game";
     ASSERT_TRUE(service.installEngineSchemas(project, actualSchemas()));
     const auto generation = service.schemaGeneration();
     for (const auto* bad : {R"({"type":42})", R"({"minimum":"zero"})", R"({"required":[false]})",
@@ -129,7 +131,7 @@ TEST(JsonSchema, MalformedNestedEngineSchemaKeywordsNeverReplaceAdmittedShapes) 
 }
 TEST(JsonSchema, ActualEngineKeysCompleteAndInvalidReplacementKeepsPriorSchema) {
     JsonSchemaService service;
-    const auto project = root + "Game";
+    const auto project = root() + "Game";
     const auto path = project + "/Assets/a.fmat";
     ASSERT_TRUE(service.installEngineSchemas(project, actualSchemas()));
     const auto text = snapshot("{");
@@ -149,7 +151,7 @@ Json actualTableSchema() {
 }
 TEST(JsonSchema, ActualInheritedTableColumnsCompleteAndHoverWithDefaultsAndBounds) {
     JsonSchemaService service;
-    const auto project = root + "Game";
+    const auto project = root() + "Game";
     const auto path = project + "/Assets/Weapons.ftable";
     ASSERT_TRUE(service.installEngineSchemas(project, actualSchemas()));
     const auto text = snapshot(R"({"Schema":"Assets/Weapon.fschema","Rows":[{"Damage":101}]})");
@@ -176,7 +178,7 @@ TEST(JsonSchema, ActualInheritedTableColumnsCompleteAndHoverWithDefaultsAndBound
 }
 TEST(JsonSchema, ChangedTableSchemaReferenceWithdrawsOldColumnsAndMalformedExportCannotReplace) {
     JsonSchemaService service;
-    const auto project = root + "Game";
+    const auto project = root() + "Game";
     const auto path = project + "/Assets/Weapons.ftable";
     ASSERT_TRUE(service.installEngineSchemas(project, actualSchemas()));
     const auto text = snapshot(R"({"Schema":"Assets/Weapon.fschema","Rows":[]})");
@@ -193,7 +195,7 @@ TEST(JsonSchema, ChangedTableSchemaReferenceWithdrawsOldColumnsAndMalformedExpor
 }
 TEST(JsonSchema, ReflectedAlternateEncodingsStayValidAndFlagNamesCompleteInsideArrayUnion) {
     JsonSchemaService service;
-    const auto project = root + "Game";
+    const auto project = root() + "Game";
     const auto path = project + "/a.fscene";
     const auto schema =
         rpc::parseJson(
@@ -210,7 +212,7 @@ TEST(JsonSchema, ReflectedAlternateEncodingsStayValidAndFlagNamesCompleteInsideA
 }
 TEST(JsonSchema, ActualVectorInputShapeAllowsEngineSpecialFloatStrings) {
     JsonSchemaService service;
-    const auto project = root + "Game";
+    const auto project = root() + "Game";
     const auto path = project + "/a.fscene";
     const auto schema =
         rpc::parseJson(
@@ -227,7 +229,7 @@ Json referenceSchemas() {
 }
 TEST(JsonSchema, TypedActualAssetCompletionAndExactU64DefinitionRevokeWithIndex) {
     JsonSchemaService service;
-    const auto project = root + "Game";
+    const auto project = root() + "Game";
     const auto path = project + "/a.fscene";
     ASSERT_TRUE(service.installEngineSchemas(project, referenceSchemas()));
     JsonAssetReferenceProvider provider;
@@ -266,7 +268,7 @@ TEST(JsonSchema, TypedActualAssetCompletionAndExactU64DefinitionRevokeWithIndex)
 }
 TEST(JsonSchema, CapturedEntityReferencesNavigateExactIdAndRefuseDuplicateTargets) {
     JsonSchemaService service;
-    const auto project = root + "Game";
+    const auto project = root() + "Game";
     const auto path = project + "/a.fscene";
     ASSERT_TRUE(service.installEngineSchemas(project, referenceSchemas()));
     const auto text = snapshot(
@@ -294,7 +296,7 @@ TEST(JsonSchema, CapturedEntityReferencesNavigateExactIdAndRefuseDuplicateTarget
 }
 TEST(JsonSchema, InheritedColumnDefinitionUsesActualDeclaredFileAndCapturedOpenOverride) {
     JsonSchemaService service;
-    const auto project = root + "Game";
+    const auto project = root() + "Game";
     const auto path = project + "/Assets/Weapons.ftable";
     ASSERT_TRUE(service.installEngineSchemas(project, actualSchemas()));
     const auto table = snapshot(R"({"Schema":"Assets/Weapon.fschema","Rows":[{"Damage":1}]})");
@@ -332,7 +334,7 @@ TEST(JsonSchema, InheritedColumnDefinitionUsesActualDeclaredFileAndCapturedOpenO
 }
 TEST(JsonSchema, DeclarationReadCannotPublishAfterSelectedSchemaGenerationChanges) {
     JsonSchemaService service;
-    const auto project = root + "Game";
+    const auto project = root() + "Game";
     const auto path = project + "/Assets/Weapons.ftable";
     ASSERT_TRUE(service.installEngineSchemas(project, actualSchemas()));
     const auto table = snapshot(R"({"Schema":"Assets/Weapon.fschema","Rows":[{"Damage":1}]})");
@@ -351,7 +353,7 @@ TEST(JsonSchema, DeclarationReadCannotPublishAfterSelectedSchemaGenerationChange
 }
 TEST(JsonSchema, CapturedSceneStructureUsesActualParentHierarchyAndExactIdSelections) {
     JsonSchemaService service;
-    const auto project = root + "Game";
+    const auto project = root() + "Game";
     const auto path = project + "/a.fscene";
     ASSERT_TRUE(service.installEngineSchemas(project, referenceSchemas()));
     const auto text = snapshot(
@@ -379,7 +381,7 @@ TEST(JsonSchema, CapturedSceneStructureUsesActualParentHierarchyAndExactIdSelect
 }
 TEST(JsonSchema, InvalidEntityTopologyIsRefusedAndGenericSchemaStructureUsesActualKeys) {
     JsonSchemaService service;
-    const auto project = root + "Game";
+    const auto project = root() + "Game";
     const auto path = project + "/a.fscene";
     ASSERT_TRUE(service.installEngineSchemas(project, referenceSchemas()));
     auto params = Json::object().set("textDocument", textDocumentIdentifier(path).value());
@@ -406,7 +408,7 @@ TEST(JsonSchema, InvalidEntityTopologyIsRefusedAndGenericSchemaStructureUsesActu
 }
 TEST(JsonSchema, SessionSchemaLossKeepsOnlyLabeledProjectIndexSnapshotLookupsUntilIndexRevocation) {
     JsonSchemaService service;
-    const auto project = root + "Game";
+    const auto project = root() + "Game";
     const auto material = project + "/Assets/Material.fmat", meta = project + "/Assets/Texture.png.fmeta";
     ASSERT_TRUE(service.installEngineSchemas(project, actualSchemas()));
     service.updateDocument(material, snapshot(R"({"Program":42})"));
@@ -457,7 +459,7 @@ TEST(JsonSchema, EntityHierarchyBoundsRefuseRatherThanDropCapturedEntities) {
 }
 TEST(JsonSchema, GenericStructurePropertySelectionsRemainInsideWholeRangesRecursively) {
     JsonSchemaService service;
-    const auto path = root + "Game/Assets/Test.fschema";
+    const auto path = root() + "Game/Assets/Test.fschema";
     const auto text = snapshot("{\n\"Columns\":[{\"Name\":\"Damage\",\"Type\":\"Int\",\"Nested\":{\"Value\":1}}]}");
     service.updateDocument(path, text);
     auto params = Json::object().set("textDocument", textDocumentIdentifier(path).value());

@@ -216,7 +216,7 @@ void EngineMixedDebugCoordinator::refresh() {
         (!p || !p->same(s.capture->pair) || (s.phase != Impl::Phase::LuaContinue && !s.samePause(*s.capture))))
         s.clear(QStringLiteral("The engine identity or Lua pause changed; combined stacks were cleared"));
     if (!p) {
-        next.status = reason;
+        next.status = std::move(reason);
     } else {
         auto* n = p->native.controller.data();
         next.processId = p->native.target.pid;

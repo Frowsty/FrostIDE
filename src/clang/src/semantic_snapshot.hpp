@@ -90,7 +90,7 @@ inline std::string absolute(llvm::StringRef path, llvm::StringRef directory) {
     if (!llvm::sys::path::is_absolute(value)) {
         llvm::SmallString<256> base(directory);
         llvm::sys::path::append(base, value);
-        value = base;
+        value = std::move(base);
     }
     llvm::sys::path::remove_dots(value, true);
     llvm::sys::path::native(value);
@@ -309,7 +309,7 @@ protected:
         if (!llvm::sys::path::is_absolute(value) && cwd) {
             llvm::SmallString<256> joined(*cwd);
             llvm::sys::path::append(joined, value);
-            value = joined;
+            value = std::move(joined);
         }
         llvm::sys::path::native(value);
         return value.str().str();

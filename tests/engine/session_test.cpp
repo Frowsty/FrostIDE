@@ -59,7 +59,12 @@ public:
                          std::optional<Json> crashSource = std::nullopt)
         : m_badProof(badProof), m_processId(std::move(processId)), m_badInfoIdentity(badInfoIdentity),
           m_scriptDebug(std::move(scriptDebug)), m_bootstrapOverrides(std::move(bootstrapOverrides)),
-          m_pendingPlayer(pendingPlayer), m_crashSource(std::move(crashSource)) {
+          m_pendingPlayer(pendingPlayer), m_crashSource(std::move(crashSource))
+#ifndef _WIN32
+          ,
+          m_listener(socket(AF_INET, SOCK_STREAM, IPPROTO_TCP))
+#endif
+    {
 #ifdef _WIN32
         WSADATA data{};
         if (WSAStartup(MAKEWORD(2, 2), &data) != 0)
@@ -76,7 +81,9 @@ public:
         endpoint.instanceId = std::string(32, 'a');
         endpoint.generation = std::string(32, generation);
         endpoint.secret = "paired-test-token";
+#ifdef _WIN32
         m_listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+#endif
         if (m_listener == kInvalid)
             return;
         sockaddr_in address{};
@@ -92,7 +99,7 @@ public:
         if (getsockname(m_listener, reinterpret_cast<sockaddr*>(&address), &size) != 0)
             return;
         endpoint.port = ntohs(address.sin_port);
-        m_thread = std::jthread([this](std::stop_token stop) { run(stop); });
+        m_thread = std::jthread([this](const std::stop_token& stop) { run(stop); });
     }
     ~SessionPeer() {
         stop();
@@ -145,7 +152,7 @@ private:
                "\ncapabilities=session.v2,auth.hmac-sha256,events.v1,heartbeat.v1\nheartbeatIntervalMs="
                "50\nheartbeatTimeoutMs=250\n";
     }
-    bool sendJson(Socket peer, Json value) {
+    bool sendJson(Socket peer, const Json& value) {
         const auto bytes = value.dump() + "\n";
         std::size_t offset = 0;
         while (offset < bytes.size()) {
@@ -160,7 +167,7 @@ private:
         }
         return true;
     }
-    void run(std::stop_token stop) {
+    void run(const std::stop_token& stop) {
         while (!stop.stop_requested() && !ready(m_listener, 20)) {
         }
         if (stop.stop_requested())

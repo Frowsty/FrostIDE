@@ -258,7 +258,7 @@ TEST_F(CMakeServiceTest, DebugReloadUsesConfigurePipelineAndSavesBeforeLaunch) {
     ASSERT_TRUE(service->openFolder(folder()));
     std::atomic<bool> saved{false};
     std::promise<void> connected;
-    service->setSaveAllHook([&](auto done) {
+    service->setSaveAllHook([&](const auto& done) {
         saved = true;
         done(Result<void>{});
     });
@@ -1169,7 +1169,7 @@ TEST_F(CMakeServiceTest, NamedInstallAndSingleFileUseTheNativeBuildPipeline) {
     ASSERT_TRUE(service->openFolder(folder()));
     waitIdle();
     int saves = 0;
-    service->setSaveAllHook([&](SaveAllCompletion done) {
+    service->setSaveAllHook([&](const SaveAllCompletion& done) {
         ++saves;
         done({});
     });

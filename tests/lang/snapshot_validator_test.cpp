@@ -13,11 +13,13 @@
 namespace frost::lang {
 namespace {
 using namespace std::chrono_literals;
+std::string neverSaved() {
 #ifdef _WIN32
-const std::string kNeverSaved = "C:/NeverSaved/";
+    return "C:/NeverSaved/";
 #else
-const std::string kNeverSaved = "/NeverSaved/";
+    return "/NeverSaved/";
 #endif
+}
 
 Result<io::ProcessResult> worker(std::string_view request) {
     auto executable = io::normalizePath(FROST_SNAPSHOT_VALIDATOR);
@@ -53,7 +55,7 @@ Result<Json> issues(std::string_view path, const text::Snapshot& text, const std
 }
 
 TEST(SnapshotValidatorCli, CMakeUsesUnsavedSyntaxAndFindsOnlyUnconditionalDuplicates) {
-    const auto path = kNeverSaved + "CMakeLists.txt";
+    const auto path = neverSaved() + "CMakeLists.txt";
     const auto invalid = issues(path, snapshot("add_custom_target("));
     ASSERT_TRUE(invalid) << invalid.error().describe();
     ASSERT_EQ(invalid->size(), 1U);
@@ -74,7 +76,7 @@ TEST(SnapshotValidatorCli, CMakeUsesUnsavedSyntaxAndFindsOnlyUnconditionalDuplic
 }
 
 TEST(SnapshotValidatorCli, BundledJsonAndJsoncUseTheirCapturedValueRanges) {
-    const auto path = kNeverSaved + "CMakePresets.json";
+    const auto path = neverSaved() + "CMakePresets.json";
     const auto invalid = issues(path, snapshot("{"));
     ASSERT_TRUE(invalid) << invalid.error().describe();
     ASSERT_EQ(invalid->size(), 1U);
@@ -93,7 +95,7 @@ TEST(SnapshotValidatorCli, BundledJsonAndJsoncUseTheirCapturedValueRanges) {
     ASSERT_TRUE(clean) << clean.error().describe();
     EXPECT_EQ(clean->size(), 0U);
 
-    const auto luaPath = kNeverSaved + ".luarc.jsonc";
+    const auto luaPath = neverSaved() + ".luarc.jsonc";
     const auto wrongType = issues(luaPath, snapshot("{/* offline */\"diagnostics.enable\":3,}"));
     ASSERT_TRUE(wrongType) << wrongType.error().describe();
     ASSERT_EQ(wrongType->size(), 1U);
@@ -106,7 +108,7 @@ TEST(SnapshotValidatorCli, BundledJsonAndJsoncUseTheirCapturedValueRanges) {
 TEST(SnapshotValidatorCli, AppliesCapturedSelectedEngineShape) {
     const auto shape =
         Json::object().set("properties", Json::object().set("Enabled", Json::object().set("type", "boolean")));
-    const auto path = kNeverSaved + "asset.fmat";
+    const auto path = neverSaved() + "asset.fmat";
     const auto invalid = issues(path, snapshot(R"({"Enabled":3,"Future":true})"), shape);
     ASSERT_TRUE(invalid) << invalid.error().describe();
     ASSERT_EQ(invalid->size(), 1U);
@@ -137,7 +139,7 @@ TEST(SnapshotValidatorCli, RejectsBadRequestsWithoutDiagnosticOutput) {
 }
 
 TEST(SnapshotValidatorCli, OversizedDocumentRefusesAtBothEnds) {
-    const auto path = kNeverSaved + "CMakeLists.txt";
+    const auto path = neverSaved() + "CMakeLists.txt";
     const std::string text(256 * 1024 + 1, ' ');
     const auto rejected = makeSnapshotValidationRequest(path, snapshot(text));
     ASSERT_FALSE(rejected);

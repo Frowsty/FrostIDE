@@ -14,9 +14,9 @@ namespace frost::engine {
 namespace {
 using rpc::Json;
 #ifdef _WIN32
-const std::string root = "C:/selected-binding";
+constexpr const char* root = "C:/selected-binding";
 #else
-const std::string root = "/selected-binding";
+constexpr const char* root = "/selected-binding";
 #endif
 std::string path(std::string_view file) { return io::joinPath(root, file).value(); }
 text::Snapshot snapshot(std::string contents) {

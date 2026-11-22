@@ -16,6 +16,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -113,9 +114,9 @@ public:
     // The number in the last line "<prefix><n>", or -1 if there is none.
     std::int64_t lastNumber(std::string_view prefix) const {
         std::lock_guard lock(m_mutex);
-        for (auto it = m_lines.rbegin(); it != m_lines.rend(); ++it) {
-            if (it->starts_with(prefix)) {
-                return std::stoll(it->substr(prefix.size()));
+        for (const auto& line : std::views::reverse(m_lines)) {
+            if (line.starts_with(prefix)) {
+                return std::stoll(line.substr(prefix.size()));
             }
         }
         return -1;

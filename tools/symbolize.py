@@ -593,6 +593,51 @@ def is_pseudo_module(module: Module) -> bool:
     return not module.path or module.path.startswith("[") or name.startswith(("linux-vdso.so", "linux-gate.so"))
 
 
+# Standard Linux dynamic loader directories searched when Crashpad records a shared library by
+# its bare DT_SONAME (for example "libc.so.6") rather than its full path.
+LINUX_LIBRARY_DIRS: tuple[Path, ...] = (
+    Path("/lib/x86_64-linux-gnu"),
+    Path("/usr/lib/x86_64-linux-gnu"),
+    Path("/lib64"),
+    Path("/usr/lib64"),
+    Path("/lib"),
+    Path("/usr/lib"),
+)
+
+
+def is_bare_name(path: str) -> bool:
+    """Whether `path` is a plain file name with no directory or drive component."""
+    return (bool(path) and path == base_name(path) and "/" not in path and "\\" not in path and ":" not in path
+            and path not in (".", ".."))
+
+
+def _ldconfig_paths() -> dict[str, list[Path]]:
+    """Maps bare ELF SONAMEs to absolute paths reported by `ldconfig -p` on POSIX, or {}."""
+    if os.name != "posix":
+        return {}
+    exe = (shutil.which("ldconfig")
+           or next((p for p in ("/sbin/ldconfig", "/usr/sbin/ldconfig") if Path(p).is_file()), None))
+    if exe is None:
+        return {}
+    try:
+        completed = subprocess.run([exe, "-p"], capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                   timeout=10, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    if completed.returncode != 0:
+        return {}
+    mapping: dict[str, list[Path]] = {}
+    for line in completed.stdout.splitlines():
+        if "=>" not in line:
+            continue
+        left, right = line.split("=>", 1)
+        soname = left.strip().split(None, 1)[0] if left.strip() else ""
+        target = right.strip()
+        if soname and target.startswith("/"):
+            mapping.setdefault(soname, []).append(Path(target))
+    return mapping
+
+
 def parse_symbolizer_output(text: str, count: int) -> list[list[Symbol] | str]:
     """llvm-symbolizer's JSON output for `count` addresses: per address its symbols (innermost
     inlined function first) or an error message. One JSON array for a call's addresses; JSON
@@ -627,6 +672,21 @@ class Symbolizer:
         self.executable = executable
         self.search_dirs = search_dirs
         self._located: dict[tuple[str, Identity], tuple[LocalImage | None, str]] = {}
+        self._ldconfig: dict[str, list[Path]] | None = None
+
+    def _elf_system_candidates(self, name: str) -> list[Path]:
+        dirs: list[Path] = []
+        if os.name == "posix":
+            for entry in os.environ.get("LD_LIBRARY_PATH", "").split(os.pathsep):
+                if entry.startswith("/"):
+                    dirs.append(Path(entry))
+        dirs.extend(LINUX_LIBRARY_DIRS)
+        return [directory / name for directory in dirs]
+
+    def _ldconfig_candidates(self, name: str) -> list[Path]:
+        if self._ldconfig is None:
+            self._ldconfig = _ldconfig_paths()
+        return list(self._ldconfig.get(name, ()))
 
     def locate(self, module: Module) -> tuple[LocalImage | None, str]:
         """The local file for `module` and "" if its identity matches, else (None, reason)."""
@@ -635,23 +695,37 @@ class Symbolizer:
             return self._located[key]
         candidates = [Path(plain_path(module.path))] if module.path else []
         search = [directory / base_name(module.path) for directory in self.search_dirs if module.path]
+        bare_elf = module.identity.kind == "gnu-build-id" and is_bare_name(module.path)
         if module.identity.kind == "gnu-build-id":
             companions = [path for path in search if path.with_name(path.name + ".debug").is_file()]
             candidates = companions + candidates
         candidates += search
+        if bare_elf:
+            candidates += self._elf_system_candidates(module.path)
         result: tuple[LocalImage | None, str] = (None, "module not found")
-        for candidate in candidates:
-            image = local_image(candidate) if candidate.is_file() else None
-            if image is None:
-                continue
-            if module.identity.kind == "none":
-                result = (None, "no identity recorded")
-            elif image.identity.matches(module.identity):
-                result = (image, "")
-                break
-            else:
-                result = (None, f"identity mismatch (recorded {module.identity.text()}, "
-                                f"{candidate} has {image.identity.text()})")
+        seen: set[Path] = set()
+
+        def try_candidates(paths: list[Path]) -> bool:
+            nonlocal result
+            for candidate in paths:
+                if candidate in seen:
+                    continue
+                seen.add(candidate)
+                image = local_image(candidate) if candidate.is_file() else None
+                if image is None:
+                    continue
+                if module.identity.kind == "none":
+                    result = (None, "no identity recorded")
+                elif image.identity.matches(module.identity):
+                    result = (image, "")
+                    return True
+                else:
+                    result = (None, f"identity mismatch (recorded {module.identity.text()}, "
+                                    f"{candidate} has {image.identity.text()})")
+            return False
+
+        if not try_candidates(candidates) and bare_elf:
+            try_candidates(self._ldconfig_candidates(module.path))
         self._located[key] = result
         return result
 

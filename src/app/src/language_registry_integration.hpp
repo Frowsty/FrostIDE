@@ -24,7 +24,7 @@ public:
     [[nodiscard]] std::shared_ptr<lang::LuaService> service(std::string_view path) const;
     [[nodiscard]] std::vector<lang::LiveDiagnostic> problems() const;
     [[nodiscard]] lang::Json snapshot() const;
-    [[nodiscard]] sched::Task<Result<lang::Json>> executeCommand(std::string path, std::string serverId,
+    [[nodiscard]] sched::Task<Result<lang::Json>> executeCommand(const std::string& path, const std::string& serverId,
                                                                  std::string command, lang::Json arguments,
                                                                  std::stop_token stop);
 

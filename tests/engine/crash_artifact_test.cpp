@@ -12,9 +12,11 @@ namespace {
 using namespace std::chrono_literals;
 using rpc::Json;
 #ifdef _WIN32
-const std::string root = "C:/artifact-test", project = "C:/trusted-project";
+constexpr const char* root = "C:/artifact-test";
+constexpr const char* project = "C:/trusted-project";
 #else
-const std::string root = "/artifact-test", project = "/trusted-project";
+constexpr const char* root = "/artifact-test";
+constexpr const char* project = "/trusted-project";
 #endif
 class PathFaultFs final : public io::IFileSystem {
 public:

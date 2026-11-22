@@ -270,7 +270,7 @@ void Workbench::attach(ui::ShellWindow& window) {
     connect(m_engineRunDebug.get(), &EngineRunDebugCoordinator::failed, this,
             [this](const QString& message) { notify(text("Engine debugger"), message, ui::NotificationKind::Error); });
     m_compoundDebug->setAdditionalPrepare(
-        [this](const run::RunConfiguration& configuration, std::stop_token stop,
+        [this](const run::RunConfiguration& configuration, const std::stop_token& stop,
                MultiSessionDebugCoordinator::Prepared completed) -> std::optional<Result<void>> {
             if (!run::isFrostEngineRunType(configuration.type))
                 return std::nullopt;

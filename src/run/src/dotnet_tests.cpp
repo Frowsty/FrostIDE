@@ -85,11 +85,11 @@ Result<io::ProcessSpec> dotnetTestSpec(const DotnetTestRequest& request) {
     spec->arguments.insert(spec->arguments.end(), {"--configuration", request.project.configuration, "--framework",
                                                    request.project.targetFramework, "--no-restore"});
     if (!request.build)
-        spec->arguments.push_back("--no-build");
+        spec->arguments.emplace_back("--no-build");
     if (!request.project.runtimeIdentifier.empty())
         spec->arguments.insert(spec->arguments.end(), {"--runtime", request.project.runtimeIdentifier});
     if (request.discover)
-        spec->arguments.push_back("--list-tests");
+        spec->arguments.emplace_back("--list-tests");
     else {
         spec->arguments.insert(spec->arguments.end(), {"--results-directory", request.reportDirectory});
         if (request.platform == DotnetTestPlatform::MicrosoftTestingPlatform)
@@ -105,7 +105,7 @@ Result<io::ProcessSpec> dotnetTestSpec(const DotnetTestRequest& request) {
                 return fail(ErrorCode::Unsupported,
                             "adapter test identity cannot be represented by an exact VSTest filter");
             if (!filter.empty())
-                filter += "|";
+                filter += '|';
             filter += "FullyQualifiedName=" + name;
         }
         spec->arguments.insert(spec->arguments.end(), {"--filter", filter});

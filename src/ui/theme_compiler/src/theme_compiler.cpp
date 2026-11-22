@@ -448,7 +448,7 @@ private:
                 if (entry.unit == MetricUnit::Px && *value > normal) {
                     error(path, std::format("compact {} = {} exceeds the normal value {}", name, *value, normal));
                 }
-                compact[static_cast<std::size_t>(*key)] = *value;
+                compact[static_cast<std::size_t>(*key)] = value;
             }
         }
         // A key without its own compact value takes that of the key its normal value came from

@@ -42,8 +42,8 @@ inline MsvcReplayArgument normalizeMsvcReplayArgument(llvm::StringRef argument, 
 }
 
 inline void disableImplicitModules(std::vector<std::string>& arguments, bool clMode) {
-    arguments.push_back(clMode ? "/clang:-fno-implicit-modules" : "-fno-implicit-modules");
-    arguments.push_back(clMode ? "/clang:-fno-implicit-module-maps" : "-fno-implicit-module-maps");
+    arguments.emplace_back(clMode ? "/clang:-fno-implicit-modules" : "-fno-implicit-modules");
+    arguments.emplace_back(clMode ? "/clang:-fno-implicit-module-maps" : "-fno-implicit-module-maps");
 }
 
 } // namespace frost::clang_engine::semantic

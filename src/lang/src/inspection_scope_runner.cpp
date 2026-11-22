@@ -7,7 +7,7 @@ namespace frost::lang {
 Result<InspectionScopeFixProposal> runInspectionScopeFixes(io::IProcessLauncher& launcher, io::IFileSystem& fs,
                                                            InspectionRequest request,
                                                            const InspectionScopeCapture& capture, std::string helper,
-                                                           std::string scratchDirectory) {
+                                                           const std::string& scratchDirectory) {
     auto scratch = fs.physicalPath(scratchDirectory);
     if (!scratch || !io::isAbsolutePath(helper))
         return fail(ErrorCode::InvalidArgument, "A private scratch directory and absolute LLVM helper are required");
@@ -63,7 +63,7 @@ Result<InspectionScopeFixProposal> runInspectionScopeFixes(io::IProcessLauncher&
     request.compileCommandsDir = *scratch;
     request.exportFixesPath = exported;
     if (!request.profile.respectProjectClangTidy)
-        request.extraArgs.push_back("--config={}");
+        request.extraArgs.emplace_back("--config={}");
     std::string headerFilter = "^";
     for (const char c : capture.root) {
         if (c == '/' || c == '\\')

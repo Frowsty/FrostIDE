@@ -98,7 +98,7 @@ Result<RunConfiguration> luaFrameworkConfiguration(LuaTestProfile profile, RunCo
         for (const auto& name : cases)
             config.arguments.push_back("--filter=" + luaExactPattern(name));
         if (listing)
-            config.arguments.push_back("--list");
+            config.arguments.emplace_back("--list");
         else if (!report.empty())
             config.arguments.insert(config.arguments.end(), {"--output=junit", "-Xoutput", std::string(report)});
     } else {

@@ -7,6 +7,7 @@
 
 #include <array>
 #include <cctype>
+#include <ranges>
 #include <utility>
 
 namespace frost::debug::msvc {
@@ -157,11 +158,11 @@ private:
             return std::nullopt;
         }
         std::string out;
-        for (auto it = parts.rbegin(); it != parts.rend(); ++it) {
+        for (const auto& part : std::views::reverse(parts)) {
             if (!out.empty()) {
                 out += "::";
             }
-            out += *it;
+            out += part;
         }
         return out;
     }

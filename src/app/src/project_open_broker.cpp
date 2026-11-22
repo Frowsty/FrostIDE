@@ -189,7 +189,7 @@ Result<void> openExternalFile(Workbench& workbench, std::string_view path, int l
         target.suffix().compare(QStringLiteral("sln"), Qt::CaseInsensitive) == 0 ||
         target.suffix().compare(QStringLiteral("slnx"), Qt::CaseInsensitive) == 0)
         return fail(ErrorCode::InvalidArgument, "external file must be an existing editor document");
-    const std::string canonical = *canonicalPath;
+    const std::string& canonical = *canonicalPath;
     // An editor opened through a symlink or directory junction can already hold unsaved changes. Reopen its
     // original path to select that tab instead of creating a second document for the target.
     std::string editorPath = canonical;

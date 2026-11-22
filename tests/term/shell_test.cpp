@@ -23,7 +23,9 @@ namespace {
 
 using frost::ErrorCode;
 using frost::term::defaultShell;
+#ifdef _WIN32
 using frost::term::isInsideRoot;
+#endif
 using frost::term::planTerminalLaunch;
 using frost::term::ShellProbe;
 using frost::term::TerminalLaunchRequest;

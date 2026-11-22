@@ -110,7 +110,7 @@ int sampleWorkbench(const wchar_t* executable) {
         std::cerr << child.error().describe() << '\n';
         return 1;
     }
-    std::cout << "root " << child->pid() << std::endl;
+    std::cout << "root " << child->pid() << '\n' << std::flush;
     // The driving test proves phase via the authenticated Workbench endpoint
     // before requesting a sample. Keeping the launcher alive owns the whole job.
     for (std::string request; std::getline(std::cin, request);) {
@@ -131,7 +131,7 @@ int sampleWorkbench(const wchar_t* executable) {
         for (const auto pid : tree->memberPids) {
             std::cout << ' ' << pid;
         }
-        std::cout << std::endl;
+        std::cout << '\n' << std::flush;
     }
     return 1;
 }

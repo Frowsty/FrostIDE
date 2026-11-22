@@ -16,13 +16,13 @@ using namespace std::chrono_literals;
 using namespace frost;
 using namespace frost::app::test;
 lang::Json evaluated(const WorkDir& dir, std::string framework = "net10.0", std::string rid = "",
-                     std::string projectName = "App.csproj") {
+                     const std::string& projectName = "App.csproj") {
     auto properties = lang::Json::object()
                           .set("TargetPath", dir.join("project/bin/App.dll"))
-                          .set("TargetFramework", framework)
+                          .set("TargetFramework", std::move(framework))
                           .set("TargetFrameworks", "net10.0;netstandard2.1")
                           .set("OutputType", "Exe")
-                          .set("RuntimeIdentifier", rid)
+                          .set("RuntimeIdentifier", std::move(rid))
                           .set("MSBuildProjectFullPath", dir.join("project/" + projectName))
                           .set("UsingMicrosoftNETSdk", "true")
                           .set("AssemblyName", "App")

@@ -162,7 +162,7 @@ struct AgentIntegration::State {
         }
         return files;
     }
-    void dispatch(const QString& method, const QJsonObject& params, AgentBridge::Reply reply) {
+    void dispatch(const QString& method, const QJsonObject& params, const AgentBridge::Reply& reply) {
         if (!admitted()) {
             reply(failure("workspace consent expired"));
             return;
@@ -384,12 +384,11 @@ struct AgentIntegration::State {
 };
 AgentIntegration::AgentIntegration(Workbench& owner) : QObject(&owner), m(std::make_unique<State>(*this, owner)) {
     connect(&owner, &Workbench::projectChanged, this, [this](const QString&) { stop(); });
-    m->bridge = std::make_unique<AgentBridge>(
-        [this] { return m->admitted(); },
-        [this](const QString& method, const QJsonObject& params, AgentBridge::Reply reply) {
-            m->dispatch(method, params, std::move(reply));
-        },
-        this);
+    m->bridge =
+        std::make_unique<AgentBridge>([this] { return m->admitted(); },
+                                      [this](const QString& method, const QJsonObject& params,
+                                             const AgentBridge::Reply& reply) { m->dispatch(method, params, reply); },
+                                      this);
     m->timer.setInterval(75);
     connect(&m->timer, &QTimer::timeout, this, [this] {
         if (!m->admitted()) {

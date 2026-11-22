@@ -77,7 +77,11 @@ public:
     explicit ScriptedMono(bool badImage = false, bool failResume = false, bool failSecondClear = false,
                           bool stopAfterResume = false, bool exceptionStop = false, bool childDomain = false,
                           bool firstSourceEmpty = false)
-        : badImage(badImage), failResume(failResume), failSecondClear(failSecondClear),
+        :
+#ifndef _WIN32
+          listener(socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)),
+#endif
+          badImage(badImage), failResume(failResume), failSecondClear(failSecondClear),
           stopAfterResume(stopAfterResume), exceptionStop(exceptionStop), childDomain(childDomain),
           firstSourceEmpty(firstSourceEmpty) {
 #ifdef _WIN32
@@ -85,8 +89,8 @@ public:
         if (WSAStartup(MAKEWORD(2, 2), &data) != 0)
             return;
         winsock = true;
-#endif
         listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+#endif
         if (listener == badSocket)
             return;
         sockaddr_in address{};

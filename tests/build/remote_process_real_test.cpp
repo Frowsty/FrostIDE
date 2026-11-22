@@ -144,7 +144,7 @@ TEST(RemoteTransportReal, ExplicitlySelectedWslOrSshEndpointReportsActualWorkloa
         target.remotePython = *python;
     RemoteProcessLauncher launcher(io::realProcessLauncher(), target, {.admit = []() -> Result<void> { return {}; }});
     auto spec = workload(target.remotePython, "import json,sys; print(json.dumps(sys.argv[1:])); sys.exit(23)");
-    spec.arguments.push_back("literal space ; $() argument");
+    spec.arguments.emplace_back("literal space ; $() argument");
     auto actual = io::runToCompletion(launcher, spec, "", 30s);
     ASSERT_TRUE(actual) << actual.error().describe();
     EXPECT_EQ(actual->exitCode, 23);

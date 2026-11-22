@@ -11,7 +11,7 @@ unsigned char fold(unsigned char c) {
     return c == '\\' ? '/' : c;
 }
 } // namespace
-bool PathIndex::build(std::span<const std::string> paths, std::stop_token stop) {
+bool PathIndex::build(std::span<const std::string> paths, const std::stop_token& stop) {
     for (auto& posting : m_postings)
         posting.clear();
     m_count = 0;
@@ -29,7 +29,7 @@ bool PathIndex::build(std::span<const std::string> paths, std::stop_token stop) 
     return !stop.stop_requested();
 }
 std::vector<RankedPath> PathIndex::query(std::string_view pattern, std::span<const std::string> paths,
-                                         std::size_t limit, std::stop_token stop) const {
+                                         std::size_t limit, const std::stop_token& stop) const {
     std::vector<RankedPath> hits;
     if (!limit || pattern.size() > 256 || paths.size() != m_count || stop.stop_requested())
         return hits;

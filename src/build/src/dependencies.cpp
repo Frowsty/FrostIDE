@@ -44,16 +44,21 @@ Result<void> trusted(const project::TrustStore& trust, const DependencyPlan& pla
             return fail(ErrorCode::Untrusted, "Dependency execution requires trusted input folder: " + root);
     return {};
 }
-bool contained(std::string root, std::string path) {
+bool contained(std::string root, std::string_view path) {
 #ifdef _WIN32
     std::ranges::transform(root, root.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    std::ranges::transform(path, path.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    std::string lowerPath(path);
+    std::ranges::transform(lowerPath, lowerPath.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    const std::string_view normalizedPath = lowerPath;
+#else
+    const std::string_view normalizedPath = path;
 #endif
-    if (path == root)
+    if (normalizedPath == root)
         return true;
     if (!root.ends_with('/') && !root.ends_with('\\'))
         root.push_back(io::kNativePathStyle == io::PathStyle::Windows ? '\\' : '/');
-    return path.starts_with(root);
+    return normalizedPath.starts_with(root);
 }
 Result<std::string> checkedOutput(io::IFileSystem& fs, const std::string& root, std::string_view relative) {
     auto physicalRoot = fs.physicalPath(root);
@@ -285,7 +290,7 @@ Result<DependencyPlan> validateDependencyConsent(io::IFileSystem& fs, const proj
 }
 Result<io::ProcessResult> installDependencies(io::IFileSystem& fs, io::IProcessLauncher& launcher,
                                               const project::TrustStore& trust, const DependencyConsent& consent,
-                                              std::stop_token stop) {
+                                              const std::stop_token& stop) {
     if (stop.stop_requested())
         return fail(ErrorCode::Cancelled, "Dependency operation cancelled");
     auto fresh = validateDependencyConsent(fs, trust, consent);

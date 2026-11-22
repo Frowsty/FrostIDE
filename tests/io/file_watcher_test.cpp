@@ -21,9 +21,11 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <charconv>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <format>
 #include <functional>
@@ -597,9 +599,13 @@ TEST(FileWatcherLinux, ADirectoryMovedInFromAnExcludedPlaceIsWatched) {
 TEST(FileWatcherLinux, RealQueueOverflowBecomesRescan) {
     std::uint64_t limit = 16384;
     if (std::FILE* file = std::fopen("/proc/sys/fs/inotify/max_queued_events", "r"); file != nullptr) {
-        unsigned long long value = 0;
-        if (std::fscanf(file, "%llu", &value) == 1) {
-            limit = value;
+        char buffer[64]{};
+        if (std::fgets(buffer, static_cast<int>(sizeof(buffer)), file) != nullptr) {
+            std::uint64_t value = 0;
+            const auto* const end = buffer + std::strlen(buffer);
+            if (std::from_chars(buffer, end, value).ec == std::errc{}) {
+                limit = value;
+            }
         }
         std::fclose(file);
     }

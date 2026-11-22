@@ -370,7 +370,7 @@ struct NativeAgentChat::State {
                     return;
                 }
                 QPointer<NativeAgentChat> guard(&self);
-                tools->request(rpc, [guard, id](QJsonObject reply) {
+                tools->request(rpc, [guard, id](const QJsonObject& reply) {
                     if (guard)
                         guard->m->response(id, json(reply), false);
                 });
@@ -587,8 +587,7 @@ NativeAgentChat::NativeAgentChat(Workbench& owner) : QObject(&owner), m(std::mak
 }
 NativeAgentChat::~NativeAgentChat() {
     stop();
-    if (m->panel)
-        delete m->panel;
+    delete m->panel;
 }
 void NativeAgentChat::stop() {
     m->live->store(false);

@@ -184,7 +184,7 @@ Result<void> DebugController::startNativeTarget(const debug::DebugTarget& target
 }
 
 Result<void> DebugController::startAdapterTarget(const debug::DebugTarget& target, debug::AdapterFactory factory,
-                                                 rpc::Json arguments, std::string adapterId,
+                                                 rpc::Json arguments, const std::string& adapterId,
                                                  debug::DebugTargetMode mode, bool readOnly,
                                                  std::function<Result<void>()> launchAdmission,
                                                  const std::function<bool()>& ownerAdmission,
@@ -216,9 +216,8 @@ Result<void> DebugController::startAdapterTarget(const debug::DebugTarget& targe
     if ((!readOnly || !target.program.empty()) && !io::isAbsolutePath(target.program))
         return fail(ErrorCode::InvalidArgument, "The adapter program path must be absolute");
     const auto actualMode = mode;
-    const auto display = adapterId;
     auto started = startSession(
-        target.name, target.program, display,
+        target.name, target.program, adapterId,
         [this, trust = m_options.trust, trustRoots = std::move(roots), factory = std::move(factory),
          arguments = std::move(arguments), adapterId, actualMode, readOnly,
          launchAdmission = std::move(launchAdmission), sourceAllowed = std::move(sourceAllowed)](

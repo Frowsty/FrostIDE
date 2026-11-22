@@ -90,7 +90,7 @@ std::optional<text::DocumentEncoding> parse(const storage::DocumentState& state)
         if (!offset) {
             return std::nullopt;
         }
-        result.fidelity.firstLossFileOffset = *offset;
+        result.fidelity.firstLossFileOffset = offset;
     }
     if (!f[4].empty()) {
         const auto offset = parseNumber<std::uint64_t>(f[4]);

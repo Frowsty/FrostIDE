@@ -96,7 +96,7 @@ Result<Json> exchange(io::LoopbackStream& stream, std::int64_t sequence, std::st
 } // namespace
 
 Result<LuaDebugConnection> connectLuaDebugEndpoint(LuaDebugEndpoint endpoint, LuaDebugAdmission admission,
-                                                   io::LoopbackStream::Deadline deadline, std::stop_token stop,
+                                                   io::LoopbackStream::Deadline deadline, const std::stop_token& stop,
                                                    LuaDebugTransportCallbacks callbacks) {
     const auto& identity = endpoint.identity;
     const auto credential = LuaDebugEndpointAccess::credential(endpoint);
@@ -173,12 +173,12 @@ Result<LuaDebugConnection> connectLuaDebugEndpoint(LuaDebugEndpoint endpoint, Lu
 }
 
 Result<LuaDebugPlayConnection> connectLuaDebugPlayEndpoint(std::uint16_t, std::string_view,
-                                                           io::LoopbackStream::Deadline, std::stop_token) {
+                                                           io::LoopbackStream::Deadline, const std::stop_token&) {
     return fail(ErrorCode::Unsupported, "the experimental Lua token protocol has been retired");
 }
 Result<std::unique_ptr<io::LoopbackStream>> connectLuaDebugEndpoint(std::uint16_t, std::string_view,
-                                                                    io::LoopbackStream::Deadline, bool, std::stop_token,
-                                                                    std::uint64_t*) {
+                                                                    io::LoopbackStream::Deadline, bool,
+                                                                    const std::stop_token&, std::uint64_t*) {
     return fail(ErrorCode::Unsupported, "the experimental Lua token protocol has been retired");
 }
 } // namespace frost::debug

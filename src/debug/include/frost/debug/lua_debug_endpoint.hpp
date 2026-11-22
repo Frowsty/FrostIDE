@@ -89,7 +89,7 @@ private:
 // echo credentials or unauthenticated payloads. Bounds: 1 MiB payload, 8 KiB header, no fallback.
 [[nodiscard]] Result<LuaDebugConnection> connectLuaDebugEndpoint(LuaDebugEndpoint endpoint, LuaDebugAdmission admission,
                                                                  io::LoopbackStream::Deadline deadline,
-                                                                 std::stop_token stop = {},
+                                                                 const std::stop_token& stop = {},
                                                                  LuaDebugTransportCallbacks callbacks = {});
 
 // Retired experimental-token entry points remain source compatible and fail closed without any
@@ -101,10 +101,10 @@ struct LuaDebugPlayConnection {
 };
 [[nodiscard]] Result<LuaDebugPlayConnection> connectLuaDebugPlayEndpoint(std::uint16_t port, std::string_view token,
                                                                          io::LoopbackStream::Deadline deadline,
-                                                                         std::stop_token stop = {});
+                                                                         const std::stop_token& stop = {});
 [[nodiscard]] Result<std::unique_ptr<io::LoopbackStream>>
 connectLuaDebugEndpoint(std::uint16_t port, std::string_view token, io::LoopbackStream::Deadline deadline,
-                        bool armPause = false, std::stop_token stop = {},
+                        bool armPause = false, const std::stop_token& stop = {},
                         std::uint64_t* connectionGeneration = nullptr);
 
 } // namespace frost::debug

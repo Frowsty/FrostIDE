@@ -79,7 +79,7 @@ std::string physical(std::string_view path) {
     return io::realFileSystem().canonicalPath(path).value_or(std::string(path));
 }
 
-Result<std::set<Location>> rawLocations(const Json& raw, std::string language, lang::PositionEncoding encoding,
+Result<std::set<Location>> rawLocations(const Json& raw, const std::string& language, lang::PositionEncoding encoding,
                                         const std::map<std::string, text::Snapshot>& snapshots) {
     if (!raw.isArray())
         return fail(ErrorCode::Corrupt, "real references did not return an array");

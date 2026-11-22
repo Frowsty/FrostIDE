@@ -60,7 +60,8 @@ Result<io::ProcessSpec> managedDiagnosticSpec(const ManagedDiagnosticRequest& r)
     return spec;
 }
 Result<ManagedDiagnosticReport> collectManagedDiagnostics(io::IFileSystem& fs, io::IProcessLauncher& launcher,
-                                                          const ManagedDiagnosticRequest& r, std::stop_token stop) {
+                                                          const ManagedDiagnosticRequest& r,
+                                                          const std::stop_token& stop) {
     auto spec = managedDiagnosticSpec(r);
     if (!spec)
         return std::unexpected(spec.error());
@@ -73,7 +74,7 @@ Result<ManagedDiagnosticReport> collectManagedDiagnostics(io::IFileSystem& fs, i
     std::stop_source operation;
     std::stop_callback cancel(stop, [&] { operation.request_stop(); });
     // Cheap live checks continue during tool launch/recording. Full file hash checks are worker-only.
-    std::jthread watch([&](std::stop_token done) {
+    std::jthread watch([&](const std::stop_token& done) {
         while (!done.stop_requested() && !operation.stop_requested()) {
             auto size = fs.status(*artifactPath);
             if ((size && size->size > 256U * 1024U * 1024U) || !r.admit()) {

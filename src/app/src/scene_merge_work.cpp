@@ -20,7 +20,7 @@ Result<std::string> git(const SceneMergeWork& work, std::vector<std::string> arg
     call.arguments = std::move(args);
     call.workingDirectory = work.workTree;
     call.background = true;
-    call.stop = stop;
+    call.stop = std::move(stop);
     auto result = work.runner.run(call);
     if (!result)
         return std::unexpected(result.error());
@@ -38,7 +38,7 @@ Result<std::optional<std::string>> disk(io::IFileSystem& fs, const std::string& 
 }
 class AdmittedLauncher final : public io::IProcessLauncher {
 public:
-    AdmittedLauncher(const SceneMergeWork& work, std::stop_token stop) : m_work(work), m_stop(stop) {}
+    AdmittedLauncher(const SceneMergeWork& work, std::stop_token stop) : m_work(work), m_stop(std::move(stop)) {}
     Result<std::unique_ptr<io::IProcess>> launch(const io::ProcessSpec& spec) override {
         if (auto valid = checkAdmission(); !valid)
             return std::unexpected(valid.error());
@@ -65,7 +65,7 @@ private:
 };
 } // namespace
 Result<void> validateSceneMergeSources(const SceneMergeWork& work, const SceneMergeSnapshot& source,
-                                       std::stop_token stop) {
+                                       const std::stop_token& stop) {
     if (stop.stop_requested())
         return fail(ErrorCode::Cancelled, "Scene merge cancelled");
     if (!work.tool.admitted || !work.tool.admitted())
@@ -90,7 +90,7 @@ Result<void> validateSceneMergeSources(const SceneMergeWork& work, const SceneMe
     return {};
 }
 Result<SceneMergeSnapshot> refreshSceneMerge(const SceneMergeWork& work, SceneMergeSnapshot source,
-                                             std::stop_token stop) {
+                                             const std::stop_token& stop) {
     if (auto valid = validateSceneMergeSources(work, source, stop); !valid)
         return std::unexpected(valid.error());
     auto params = engine::sceneMergeParams(source.request);
@@ -125,7 +125,7 @@ Result<SceneMergeSnapshot> refreshSceneMerge(const SceneMergeWork& work, SceneMe
     source.report = std::move(*report);
     return source;
 }
-Result<SceneMergeSnapshot> prepareSceneMerge(const SceneMergeWork& work, std::stop_token stop) {
+Result<SceneMergeSnapshot> prepareSceneMerge(const SceneMergeWork& work, const std::stop_token& stop) {
     SceneMergeSnapshot source;
     auto target = work.fs.physicalPath(work.absolute);
     if (!target)

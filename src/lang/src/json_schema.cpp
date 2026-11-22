@@ -671,13 +671,13 @@ std::string_view bundledJsonSchemaCoverage(std::string_view) {
     return "Bundled structural properties, required keys, types, enums and minima. Unknown properties allowed; no "
            "remote schemas or engine semantic validation.";
 }
-void JsonSchemaService::updateDocument(std::string path, text::Snapshot snapshot) {
+void JsonSchemaService::updateDocument(const std::string& path, text::Snapshot snapshot) {
     LockGuard lock(m_mutex);
     if (m_documents.size() >= 256 && !m_documents.contains(documentKey(path)))
         m_documents.erase(m_documents.begin());
     m_documents.insert_or_assign(documentKey(path), std::move(snapshot));
 }
-Result<void> JsonSchemaService::installEngineSchemas(std::string projectRoot, const Json& actualExport) {
+Result<void> JsonSchemaService::installEngineSchemas(const std::string& projectRoot, const Json& actualExport) {
     if (!io::isAbsolutePath(projectRoot) || actualExport.stringAt("protocol") != "frostengine.document-schemas" ||
         actualExport.integerAt("version") != 1)
         return fail(ErrorCode::Corrupt, "Unsupported engine document schema contract");
@@ -707,7 +707,7 @@ Result<void> JsonSchemaService::installEngineSchemas(std::string projectRoot, co
     ++m_schemaGeneration;
     return {};
 }
-Result<void> JsonSchemaService::installEngineTableSchema(std::string path, const text::Snapshot& snapshot,
+Result<void> JsonSchemaService::installEngineTableSchema(const std::string& path, const text::Snapshot& snapshot,
                                                          const Json& reply) {
     if (!path.ends_with(".ftable") || reply.stringAt("protocol") != "frostengine.table-schema" ||
         reply.integerAt("version") != 1 || reply.dump().size() > 2 * 1024 * 1024)
@@ -1094,7 +1094,7 @@ sched::Task<Result<Json>> JsonSchemaService::request(std::string method, Json pa
         if (indexed)
             description += "\nActual engine index snapshot asset: " + indexed->path + " (" + indexed->type + ", " +
                            std::to_string(indexed->handle) + ")";
-        description += "\n";
+        description += '\n';
         description += engine ? "Actual engine serializer/default field shapes; semantic validation requires the "
                                 "selected engine's document.validate."
                               : bundledJsonSchemaCoverage(*path);

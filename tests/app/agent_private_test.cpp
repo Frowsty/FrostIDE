@@ -56,7 +56,7 @@ TEST(AgentMcpProxy, RealStdioUsesCurrentUserPipeAndExactWindowToken) {
     const std::string token(32, 'a'), instance(32, 'b');
     auto owner = frost::io::LocalIpcOwner::claim(key);
     ASSERT_TRUE(owner);
-    ASSERT_TRUE((*owner)->start([&](std::string bytes) -> frost::Result<std::string> {
+    ASSERT_TRUE((*owner)->start([&](const std::string& bytes) -> frost::Result<std::string> {
         auto envelope = frost::rpc::parseJson(bytes);
         if (!envelope || envelope->stringAt("token") != token || envelope->stringAt("instance") != instance ||
             envelope->stringAt("root") != *root)

@@ -22,12 +22,12 @@ QString display(std::string_view text) { return QString::fromUtf8(text.data(), s
 
 RefactoringPreview::RefactoringPreview(fl::WorkspaceEdit edit, fl::PositionEncoding encoding, ReadText reader,
                                        QWidget* parent)
-    : QDialog(parent), m_edit(std::move(edit)), m_encoding(encoding), m_reader(std::move(reader)) {
+    : QDialog(parent), m_edit(std::move(edit)), m_encoding(encoding), m_reader(std::move(reader)),
+      m_tree(new QTreeWidget(this)), m_status(new QLabel(this)) {
     setObjectName(QStringLiteral("refactoringPreview"));
     setWindowTitle(tr("Refactoring Preview"));
     resize(1000, 680);
     auto* layout = new QVBoxLayout(this);
-    m_tree = new QTreeWidget(this);
     m_tree->setObjectName(QStringLiteral("refactoringEdits"));
     m_tree->setHeaderLabels({tr("Include / Location"), tr("Replacement")});
     layout->addWidget(m_tree, 1);
@@ -47,7 +47,6 @@ RefactoringPreview::RefactoringPreview(fl::WorkspaceEdit edit, fl::PositionEncod
     m_original = pane(tr("Before"), QStringLiteral("refactoringBefore"));
     m_proposed = pane(tr("After selected edits"), QStringLiteral("refactoringAfter"));
     layout->addWidget(panes, 2);
-    m_status = new QLabel(this);
     m_status->setWordWrap(true);
     layout->addWidget(m_status);
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Apply | QDialogButtonBox::Cancel, this);

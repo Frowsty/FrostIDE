@@ -46,7 +46,7 @@ Result<void> rememberPhysical(Graph& graph, std::string spelling, const std::str
 
 Result<void> captureOpenDocumentReceipts(io::IFileSystem& fs, Graph& graph,
                                          std::span<const engine::BindingDocumentCapture> openDocuments,
-                                         std::stop_token stop) {
+                                         const std::stop_token& stop) {
     std::map<std::string, std::string, std::less<>> openIdentities;
     for (const auto& document : openDocuments) {
         if (stop.stop_requested())
@@ -63,8 +63,8 @@ Result<void> captureOpenDocumentReceipts(io::IFileSystem& fs, Graph& graph,
 }
 
 Result<void> captureDocumentSnapshot(io::IFileSystem& fs, Graph& graph,
-                                     std::span<const engine::BindingDocumentCapture> openDocuments, std::string path,
-                                     std::size_t& bytes) {
+                                     std::span<const engine::BindingDocumentCapture> openDocuments,
+                                     const std::string& path, std::size_t& bytes) {
     auto resolved = resolveDocumentPath(fs, graph.physicalRoot, graph.engineRoot, graph.metadataPath, path);
     if (!resolved)
         return std::unexpected(resolved.error());

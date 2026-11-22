@@ -404,7 +404,7 @@ Result<std::vector<settings::ConditionalSettingEdit>> prepareNativeScheme(settin
                     auto parsed = input::parseSequence(shortcut, input::SyntaxMode::Strict);
                     if (!parsed)
                         return std::unexpected(parsed.error());
-                    override.sequences.push_back(std::move(*parsed));
+                    override.sequences.push_back(*parsed);
                 }
                 preferences.overrides.push_back(std::move(override));
             }

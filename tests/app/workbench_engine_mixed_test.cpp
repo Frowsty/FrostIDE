@@ -63,7 +63,7 @@ protected:
         // The private native launcher must refuse this supplied factory if preparation finishes.
         // Keeping the task pending tests the actual composed route before any native tool starts.
         options.workbench.debugAdapterFactory =
-            [this](debug::DapHandlers) -> Result<std::unique_ptr<debug::IDebugAdapterClient>> {
+            [this](const debug::DapHandlers&) -> Result<std::unique_ptr<debug::IDebugAdapterClient>> {
             ++customFactoryCalls;
             return fail(ErrorCode::Internal, "unexpected custom native factory invocation");
         };

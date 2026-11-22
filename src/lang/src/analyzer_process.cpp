@@ -41,7 +41,7 @@ Result<Json> unit(io::IProcessLauncher& launcher, const AnalyzerRequest& request
     const auto pid = (*child)->pid();
     std::atomic<bool> complete = false, overBudget = false;
     // Native RSS observations also enforce the cap on Linux, where pre-exec working-set policy is unsupported.
-    std::jthread monitor([&](std::stop_token stop) {
+    std::jthread monitor([&](const std::stop_token& stop) {
         while (!stop.stop_requested() && !complete.load()) {
             const auto rss = governor.sampleProcessRss(pid, sched::HeavyLegKind::Inspection);
             if ((rss && *rss > 2ULL * 1024ULL * 1024ULL * 1024ULL) || governor.isCombinedOverRssCap()) {

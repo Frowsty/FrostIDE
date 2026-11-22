@@ -9,7 +9,7 @@ namespace frost::lang {
 TEST(CppModulesReal, ScannerAcceptsCMakeGeneratedCommandWithAndWithoutExplicitOutput) {
     frost::test::ScratchDir scratch("cpp modules cmake");
     auto& fs = io::realFileSystem();
-    const auto root = scratch.path();
+    const auto& root = scratch.path();
     const auto compilerDir = std::string(io::parentPath(FROST_TEST_CXX_COMPILER));
 #ifdef _WIN32
     const auto compiler = io::joinPath(compilerDir, "clang-cl.exe").value();
@@ -36,7 +36,7 @@ target_compile_definitions(scanner_commands PRIVATE LABEL="quoted value")
                            build,
                            "-G",
                            "Ninja",
-                           "-DCMAKE_MAKE_PROGRAM=" FROST_TEST_NINJA,
+                           std::string("-DCMAKE_MAKE_PROGRAM=") + FROST_TEST_NINJA,
                            "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
                            "-DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY",
                            "-DCMAKE_CXX_COMPILER=" + compiler};
@@ -83,7 +83,7 @@ target_compile_definitions(scanner_commands PRIVATE LABEL="quoted value")
 TEST(CppModulesReal, ScannerGraphMatchesBuiltModuleFixture) {
     frost::test::ScratchDir scratch("cpp-modules");
     auto& fs = io::realFileSystem();
-    const auto root = scratch.path();
+    const auto& root = scratch.path();
     const auto module = io::joinPath(root, "different-filename.cppm").value();
     const auto source = io::joinPath(root, "consumer.cpp").value();
     const auto bmi = io::joinPath(root, "fixture.pcm").value();
@@ -134,7 +134,7 @@ TEST(CppModulesReal, ScannerGraphMatchesBuiltModuleFixture) {
                                             std::string(provider.stringAt("source-path")));
         if (const auto* imports = rawRule.find("requires"))
             for (const auto& imported : imports->items())
-                expectedImports.push_back(std::string(imported.stringAt("logical-name")));
+                expectedImports.emplace_back(imported.stringAt("logical-name"));
     }
     std::vector<std::string> actualProviders, actualImports;
     for (const auto& rule : graph->rules) {

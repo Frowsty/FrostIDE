@@ -1290,8 +1290,10 @@ TEST_F(DapReal, StdStringShowsItsText) {
 }
 
 TEST_F(DapReal, StdVectorShowsItsSizeOrSaysItCannot) {
+#ifndef __linux__
     const io::ProcessResult expected = oracle({"values"});
     const std::string size = field(expected.stdoutBytes, "numbers.size");
+#endif
     launch({"values"}, {at("values")});
     ASSERT_TRUE(waitStop(1));
     const dap::Variable numbers = local("numbers");

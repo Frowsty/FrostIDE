@@ -12,6 +12,7 @@
 #include <array>
 #include <format>
 #include <limits>
+#include <ranges>
 
 namespace frost::lang {
 namespace {
@@ -208,8 +209,8 @@ Result<std::vector<std::uint32_t>> applySemanticTokensEdits(std::span<const std:
         }
     }
     std::vector<std::uint32_t> out(previous.begin(), previous.end());
-    for (auto it = order.rbegin(); it != order.rend(); ++it) {
-        const SemanticTokensEdit& edit = **it;
+    for (const SemanticTokensEdit* entry : std::views::reverse(order)) {
+        const SemanticTokensEdit& edit = *entry;
         const auto first = out.begin() + edit.start;
         out.erase(first, first + edit.deleteCount);
         out.insert(out.begin() + edit.start, edit.data.begin(), edit.data.end());

@@ -12,6 +12,7 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <ranges>
 #include <utility>
 
 namespace frost::ui {
@@ -127,9 +128,9 @@ RunConsole* RunToolWindow::currentConsole() const {
 }
 
 RunConsole* RunToolWindow::consoleFor(const QString& key) const {
-    for (auto it = m_tabState.rbegin(); it != m_tabState.rend(); ++it) {
-        if (it->key == key) {
-            return it->console;
+    for (const Tab& tab : std::views::reverse(m_tabState)) {
+        if (tab.key == key) {
+            return tab.console;
         }
     }
     return nullptr;

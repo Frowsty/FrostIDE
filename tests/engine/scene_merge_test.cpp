@@ -36,7 +36,7 @@ TEST(SceneMerge, RefusesWrongSourceIdentityValidityAndEntityAmbiguity) {
     auto actual = reply(r);
     ASSERT_TRUE(parseSceneMergeReport(actual, r));
     auto changed = r;
-    changed.images.ours += " ";
+    changed.images.ours += ' ';
     EXPECT_FALSE(parseSceneMergeReport(actual, changed));
     actual.set("clean", false);
     EXPECT_FALSE(parseSceneMergeReport(actual, r));

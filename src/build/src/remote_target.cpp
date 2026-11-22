@@ -279,7 +279,7 @@ Result<io::ProcessSpec> remoteTransportSpec(const RemoteTarget& target, std::str
                           "-l",
                           target.user};
         if (!target.identityFile.empty()) {
-            spec.arguments.push_back("-i");
+            spec.arguments.emplace_back("-i");
             spec.arguments.push_back(target.identityFile);
         }
         spec.arguments.push_back(target.host);

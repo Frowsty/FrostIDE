@@ -67,7 +67,8 @@ inline constexpr std::array kDebugActions{
 // Actions resolve the selected stable session at invocation time. launch/mayLaunch belong to the
 // workspace coordinator and may start another session while existing sessions remain live.
 [[nodiscard]] Result<void> registerDebugActions(input::ActionRegistry& registry, DebugSessionRegistry& sessions,
-                                                std::function<Result<void>()> launch, std::function<bool()> mayLaunch);
+                                                const std::function<Result<void>()>& launch,
+                                                const std::function<bool()>& mayLaunch);
 
 /*
  * Adds the Debug tool window (bottom, DebugToolWindow as its content) to `windows` and registers

@@ -112,7 +112,7 @@ TEST(FrostEngineRunUi, ProcessIdentityAndPrivateOutputReachSessionHooksAndStopOw
     };
     hooks.engineLaunchPlanFor =
         [](const auto&) -> std::function<Result<run::LaunchPlan>(run::LaunchPlan, std::stop_token)> {
-        return [](run::LaunchPlan plan, std::stop_token) -> Result<run::LaunchPlan> {
+        return [](run::LaunchPlan plan, const std::stop_token&) -> Result<run::LaunchPlan> {
             plan.arguments[1] = path("physical project/Game.frostproj");
             return plan;
         };
@@ -195,12 +195,12 @@ TEST(FrostEngineRunUi, PhysicalProjectResolutionCannotReplaceExecutableOrExtraAr
         };
         hooks.engineLaunchPlanFor =
             [replaceProgram](const auto&) -> std::function<Result<run::LaunchPlan>(run::LaunchPlan, std::stop_token)> {
-            return [replaceProgram](run::LaunchPlan plan, std::stop_token) -> Result<run::LaunchPlan> {
+            return [replaceProgram](run::LaunchPlan plan, const std::stop_token&) -> Result<run::LaunchPlan> {
                 plan.arguments[1] = path("physical project/Game.frostproj");
                 if (replaceProgram) {
                     plan.program = path("unselected.exe");
                 } else {
-                    plan.arguments.push_back("--unselected-option");
+                    plan.arguments.emplace_back("--unselected-option");
                 }
                 return plan;
             };

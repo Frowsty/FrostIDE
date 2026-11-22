@@ -16,7 +16,7 @@ std::string root() {
     return "/workspace";
 #endif
 }
-lang::LuaModuleRenameRequest fixture(io::MemFs& fs, std::string users) {
+lang::LuaModuleRenameRequest fixture(io::MemFs& fs, const std::string& users) {
     const auto base = root();
     EXPECT_TRUE(fs.createDirectories(base));
     const auto from = io::joinPath(base, "old.lua").value(), to = io::joinPath(base, "new.lua").value(),

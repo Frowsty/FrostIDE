@@ -19,12 +19,12 @@ public:
     [[nodiscard]] Result<void> setCatalog(std::string manifest);
     [[nodiscard]] Result<std::string> composeLanguageRegistry(std::string_view base) const;
     [[nodiscard]] lang::Json snapshot() const;
-    [[nodiscard]] Result<void> debugCurrentFile(std::string contributionId);
-    [[nodiscard]] Result<void> executeCommand(std::string contributionId);
+    [[nodiscard]] Result<void> debugCurrentFile(const std::string& contributionId);
+    [[nodiscard]] Result<void> executeCommand(const std::string& contributionId);
 
 private:
     struct PreparedDebug;
-    void adoptDebug(std::shared_ptr<PreparedDebug> prepared);
+    void adoptDebug(const std::shared_ptr<PreparedDebug>& prepared);
     void cancelPendingDebug();
     std::shared_ptr<PreparedDebug> m_pendingDebug;
     void configure();

@@ -5,7 +5,7 @@
 #include <gtest/gtest.h>
 namespace frost::vcs {
 namespace {
-std::string record(char hash, int stage, std::string_view path, std::string mode = "100644") {
+std::string record(char hash, int stage, std::string_view path, const std::string& mode = "100644") {
     return mode + " " + std::string(40, hash) + " " + std::to_string(stage) + "\t" + std::string(path) +
            std::string(1, '\0');
 }

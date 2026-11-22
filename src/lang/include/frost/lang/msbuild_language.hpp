@@ -13,7 +13,7 @@ struct MSBuildLanguageInput {
     std::vector<project::EvaluatedProjectItems> evaluations; // Last trusted engine results, explicitly labelled.
 };
 [[nodiscard]] Result<Json> queryMSBuildLanguage(const MSBuildLanguageInput& input, std::string_view method,
-                                                const Json& params, std::stop_token stop = {});
+                                                const Json& params, const std::stop_token& stop = {});
 class MSBuildLanguageService final : public ILspRequester {
 public:
     using InputReader = CMakeLanguageService::InputReader;

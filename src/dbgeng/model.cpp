@@ -249,7 +249,7 @@ Result<rpc::Json> ModelStore::children(std::int64_t reference, std::size_t start
     const auto found = m_values.find(reference);
     if (found == m_values.end())
         return fail(ErrorCode::Cancelled, "variable reference belongs to an expired stop");
-    if (start > 65536 || count > 4096 || (filter != "" && filter != "named" && filter != "indexed"))
+    if (start > 65536 || count > 4096 || (!filter.empty() && filter != "named" && filter != "indexed"))
         return fail(ErrorCode::InvalidArgument, "variable page exceeds the bounded adapter limits");
     if (auto selected = select(found->second.frame); !selected)
         return std::unexpected(std::move(selected.error()));

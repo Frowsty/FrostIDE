@@ -59,7 +59,7 @@ inline engine::CrashArtifactSource syntheticCrashSource(std::string root, std::s
 inline Result<std::string> writeSyntheticCrashReport(io::IFileSystem& fs, const engine::CrashArtifactSource& source,
                                                      std::string_view name = "20261111T120000Z-4242",
                                                      std::int64_t crashUnixMs = 1002000,
-                                                     std::string bytes = syntheticCrashMinidump()) {
+                                                     const std::string& bytes = syntheticCrashMinidump()) {
     auto dir = io::joinPath(source.rootPath, name);
     if (!dir)
         return std::unexpected(dir.error());

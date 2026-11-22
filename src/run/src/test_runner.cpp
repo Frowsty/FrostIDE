@@ -863,7 +863,7 @@ Result<void> TestRunner::listFrameworkCases(const CTestSetup& setup, const Disco
         return std::unexpected(arguments.error());
     return startJob(
         *m_state, m_state,
-        [setup, test, profile, done = std::move(done)](State& state, std::stop_token token, std::uint64_t job,
+        [setup, test, profile, done = std::move(done)](State& state, const std::stop_token& token, std::uint64_t job,
                                                        const std::function<void()>& finish) {
             Result<std::vector<FrameworkCase>> result = fail(ErrorCode::Cancelled, "Framework listing stopped");
             const auto path = state.scratchPath(setup, job, "framework-list.txt");
@@ -946,7 +946,7 @@ io::ProcessSpec luaSpec(const LaunchPlan& plan) {
         spec.environment.emplace_back(entry.name, entry.value);
     return spec;
 }
-Result<void> startLuaJob(std::shared_ptr<TestRunner::State> state, TestRunner::LuaFrameworkRequest request,
+Result<void> startLuaJob(const std::shared_ptr<TestRunner::State>& state, TestRunner::LuaFrameworkRequest request,
                          bool listing, std::function<void(Result<std::vector<FrameworkCase>>)> done,
                          TestRunHandlers handlers) {
     if (!io::isAbsolutePath(request.scratchDirectory))

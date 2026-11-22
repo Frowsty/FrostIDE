@@ -131,7 +131,7 @@ void Workbench::showManagedDiagnostics() {
     connect(collect, &QPushButton::clicked, &dialog, [&] {
         if (!current() || !lease->load() || process->currentIndex() < 0)
             return;
-        const auto target = targets[static_cast<std::size_t>(process->currentIndex())];
+        const auto& target = targets[static_cast<std::size_t>(process->currentIndex())];
         const auto now = m_runManager->status(target.id);
         if (!now || now->processId != target.processId || now->configuration != target.configuration)
             return;
@@ -169,7 +169,7 @@ void Workbench::showManagedDiagnostics() {
         stop->setEnabled(true);
         status->setText(tr("Collecting actual tool output; Cancel ends the collector only."));
         worker = std::jthread([&, request = std::move(request), admission, fs, launcher, trust, token, target,
-                               lease](std::stop_token) mutable {
+                               lease](const std::stop_token&) mutable {
             auto result = [&]() -> Result<run::ManagedDiagnosticReport> {
                 if (auto allowed = admission(); !allowed)
                     return std::unexpected(allowed.error());

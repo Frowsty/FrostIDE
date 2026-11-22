@@ -28,9 +28,9 @@ RunConfiguration configuration(std::string target) {
     c.target = std::move(target);
     c.workingDirectory = FROST_LUA_FRAMEWORK_FIXTURES;
     if (auto path = test::environmentValue("FROST_LUA_TEST_PATH"))
-        c.environment.push_back({"LUA_PATH", std::move(*path)});
+        c.environment.push_back({"LUA_PATH", std::move(path)});
     if (auto path = test::environmentValue("FROST_LUA_TEST_CPATH"))
-        c.environment.push_back({"LUA_CPATH", std::move(*path)});
+        c.environment.push_back({"LUA_CPATH", std::move(path)});
     return c;
 }
 Result<std::vector<FrameworkCase>> discover(TestRunner& runner, TestRunner::LuaFrameworkRequest request) {

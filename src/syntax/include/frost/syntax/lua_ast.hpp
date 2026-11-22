@@ -39,5 +39,5 @@ struct LuaAstLimits {
 };
 // Worker-only one-shot parse of a captured immutable image through the SAME pinned grammar and
 // cancellable ParseJob as editor syntax. Owns the projection; no registry/tree lifetime escapes.
-[[nodiscard]] Result<LuaAstProjection> projectLuaSnapshot(text::Snapshot, const LuaAstLimits& = {});
+[[nodiscard]] Result<LuaAstProjection> projectLuaSnapshot(const text::Snapshot&, const LuaAstLimits& = {});
 } // namespace frost::syntax

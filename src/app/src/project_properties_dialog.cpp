@@ -545,7 +545,7 @@ void showProjectPropertiesDialog(
             for (const auto& binding : bindings)
                 keys.push_back(binding.key);
             evaluationStatus->setText(QStringLiteral("Evaluating imported property values..."));
-            evaluationWorker = std::jthread([&, cfg, keys = std::move(keys), generation](std::stop_token stop) {
+            evaluationWorker = std::jthread([&, cfg, keys = std::move(keys), generation](const std::stop_token& stop) {
                 auto evaluated = evaluatedProperties(cfg, keys, stop);
                 if (stop.stop_requested())
                     return;

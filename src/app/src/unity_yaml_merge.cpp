@@ -13,14 +13,14 @@
 namespace frost::app {
 namespace {
 constexpr std::size_t limit = 8 * 1024 * 1024;
-Result<void> admitted(const UnityMergeWork& work, std::stop_token stop) {
+Result<void> admitted(const UnityMergeWork& work, const std::stop_token& stop) {
     if (stop.stop_requested())
         return fail(ErrorCode::Cancelled, "UnityYAMLMerge cancelled");
     if (!work.admitted || !work.admitted() || !work.git.trusted())
         return fail(ErrorCode::Untrusted, "Unity merge project or trust admission changed");
     return {};
 }
-Result<std::string> git(const UnityMergeWork& work, std::vector<std::string> args, std::stop_token stop) {
+Result<std::string> git(const UnityMergeWork& work, std::vector<std::string> args, const std::stop_token& stop) {
     if (auto valid = admitted(work, stop); !valid)
         return std::unexpected(valid.error());
     vcs::GitInvocation call;
@@ -60,7 +60,7 @@ bool markers(std::string_view text) {
 class AdmittedLauncher final : public io::IProcessLauncher {
 public:
     AdmittedLauncher(const UnityMergeWork& work, const UnityMergePreview& source, std::stop_token stop)
-        : m_work(work), m_source(source), m_stop(stop) {}
+        : m_work(work), m_source(source), m_stop(std::move(stop)) {}
     Result<std::unique_ptr<io::IProcess>> launch(const io::ProcessSpec& spec) override {
         if (auto valid = validateUnityMergeSources(m_work, m_source, m_stop); !valid)
             return std::unexpected(valid.error());
@@ -80,7 +80,7 @@ private:
 };
 } // namespace
 Result<void> validateUnityMergeSources(const UnityMergeWork& work, const UnityMergePreview& source,
-                                       std::stop_token stop) {
+                                       const std::stop_token& stop) {
     if (auto valid = admitted(work, stop); !valid)
         return valid;
     auto root = work.fs.physicalPath(work.root), target = work.fs.physicalPath(work.absolute),
@@ -101,7 +101,7 @@ Result<void> validateUnityMergeSources(const UnityMergeWork& work, const UnityMe
         return fail(ErrorCode::Busy, "Git index, stages or working file changed; reopen the Unity merge");
     return {};
 }
-Result<UnityMergePreview> prepareUnityMerge(const UnityMergeWork& work, std::stop_token stop) {
+Result<UnityMergePreview> prepareUnityMerge(const UnityMergeWork& work, const std::stop_token& stop) {
     if (auto valid = admitted(work, stop); !valid)
         return std::unexpected(valid.error());
     const auto name = io::fileName(work.program);

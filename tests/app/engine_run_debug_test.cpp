@@ -46,7 +46,7 @@ ui::RunControllerHooks runHooks() {
     };
     h.engineLaunchPlanFor =
         [](const auto&) -> std::function<Result<run::LaunchPlan>(run::LaunchPlan, std::stop_token)> {
-        return [](run::LaunchPlan p, std::stop_token) -> Result<run::LaunchPlan> { return p; };
+        return [](run::LaunchPlan p, const std::stop_token&) -> Result<run::LaunchPlan> { return p; };
     };
     return h;
 }
@@ -94,7 +94,7 @@ TEST(EngineRunDebug, WaitsExactOwnedRunBeforePlayerAttachAndCleansRealLaunchOnFa
             return fail(ErrorCode::Busy, "pending authentication input");
         return owner("player");
     };
-    hooks.prepareLua = [&](bool play, std::stop_token, MultiSessionDebugCoordinator::Prepared done,
+    hooks.prepareLua = [&](bool play, const std::stop_token&, const MultiSessionDebugCoordinator::Prepared& done,
                            bool entry) -> Result<void> {
         ++lua;
         EXPECT_FALSE(play);
@@ -142,7 +142,7 @@ TEST(EngineRunDebug, CancelStopsOnlyCapturedOwnedRunAndNeverAnUnrelatedRun) {
     runs.setRunManager(manager.get());
     EngineRunDebugHooks hooks;
     hooks.capture = [](run::RunId) -> Result<EngineLuaDebugOwner> { return fail(ErrorCode::Busy, "pending"); };
-    hooks.prepareLua = [](bool, std::stop_token, auto, bool) -> Result<void> {
+    hooks.prepareLua = [](bool, const std::stop_token&, const auto&, bool) -> Result<void> {
         ADD_FAILURE() << "DAP must wait for owned authentication";
         return fail(ErrorCode::Internal, "unexpected");
     };
@@ -171,7 +171,7 @@ TEST(EngineRunDebug, AbandoningPreparedEditorStopsItsUnconsumedHost) {
     runs.setRunManager(manager.get());
     EngineRunDebugHooks hooks;
     hooks.capture = [](run::RunId) -> Result<EngineLuaDebugOwner> { return owner("editor"); };
-    hooks.prepareLua = [](bool play, std::stop_token, MultiSessionDebugCoordinator::Prepared done,
+    hooks.prepareLua = [](bool play, const std::stop_token&, const MultiSessionDebugCoordinator::Prepared& done,
                           bool) -> Result<void> {
         EXPECT_TRUE(play);
         done(PreparedDebugLaunch{
@@ -203,7 +203,7 @@ TEST(EngineRunDebug, WrongAuthenticatedRoleAndStartupTimeoutCannotAdoptAnotherHo
                 return owner("editor");
             return fail(ErrorCode::Busy, "pending");
         };
-        hooks.prepareLua = [](bool, std::stop_token, auto, bool) -> Result<void> {
+        hooks.prepareLua = [](bool, const std::stop_token&, const auto&, bool) -> Result<void> {
             ADD_FAILURE() << "Unmatched or unauthenticated hosts cannot prepare DAP";
             return fail(ErrorCode::Internal, "unexpected");
         };

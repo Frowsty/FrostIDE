@@ -242,7 +242,8 @@ TEST(FrostEngineRun, StopCancelsTheRealToolLifetimeInsideFinalTargetResolution) 
     config.program = path("dotnet");
     RunHandlers handlers;
     handlers = collector.handlers();
-    handlers.transformLaunchPlanWithCancellation = [&](LaunchPlan plan, std::stop_token stop) -> Result<LaunchPlan> {
+    handlers.transformLaunchPlanWithCancellation = [&](LaunchPlan plan,
+                                                       const std::stop_token& stop) -> Result<LaunchPlan> {
         io::ProcessSpec query;
         query.executable = path("target-query");
         query.stdinMode = io::Stdio::Null;

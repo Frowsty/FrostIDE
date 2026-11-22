@@ -25,8 +25,8 @@ Result<MSBuildSource> parseMSBuildSource(std::string_view source, std::string_vi
                                   std::string(detail::attribute(node, "Condition")), offset,
                                   static_cast<std::size_t>(std::count(source.begin(), end, '\n'))};
     };
-    std::function<void(pugi::xml_node, std::string)> visit;
-    visit = [&](pugi::xml_node parent, std::string condition) {
+    std::function<void(pugi::xml_node, const std::string&)> visit;
+    visit = [&](pugi::xml_node parent, const std::string& condition) {
         for (auto node : parent.children()) {
             if (node.type() != pugi::node_element)
                 continue;

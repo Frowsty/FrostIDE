@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <array>
+#include <ranges>
 #include <string>
 #include <utility>
 #include <vector>
@@ -632,9 +633,9 @@ CommandResult autoIndentLines(const CommandInput& in) noexcept {
     // The indentation each re-indented line gets (later lines refer to it, top-down).
     std::vector<std::pair<std::uint32_t, std::string>> assigned;
     const auto indentOf = [&](std::uint32_t line) {
-        for (auto it = assigned.rbegin(); it != assigned.rend(); ++it) {
-            if (it->first == line) {
-                return it->second;
+        for (const auto& [assignedLine, indent] : std::views::reverse(assigned)) {
+            if (assignedLine == line) {
+                return indent;
             }
         }
         const LineInfo info = detail::lineAt(text, line);
@@ -685,8 +686,8 @@ CommandResult autoIndentLines(const CommandInput& in) noexcept {
                         }
                         const std::vector<Token> tokens = lexLine(content, lua, lineComment);
                         bool found = false;
-                        for (auto it = tokens.rbegin(); it != tokens.rend(); ++it) {
-                            depth += *it == Token::Close ? 1 : -1;
+                        for (const Token token : std::views::reverse(tokens)) {
+                            depth += token == Token::Close ? 1 : -1;
                             if (depth == 0) {
                                 found = true;
                                 break;

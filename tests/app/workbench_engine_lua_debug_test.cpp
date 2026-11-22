@@ -231,17 +231,17 @@ struct CoordinatorRig {
             .set("phase", accepted ? "pending" : "playing")
             .set("playGeneration", accepted ? std::string{} : generation);
     }
-    void push(std::string state, std::string playGeneration, bool identified = true,
+    void push(const std::string& state, std::string playGeneration, bool identified = true,
               std::string terminal = "completed") {
-        engine->event("play.state",
-                      Json::object()
-                          .set("state", state)
-                          .set("mode", state)
-                          .set("paused", false)
-                          .set("frames", 1)
-                          .set("playGeneration", std::move(playGeneration))
-                          .set("operationId", identified ? operation : std::string{})
-                          .set("phase", identified ? (state == "Play" ? "playing" : terminal) : std::string{}));
+        engine->event("play.state", Json::object()
+                                        .set("state", state)
+                                        .set("mode", state)
+                                        .set("paused", false)
+                                        .set("frames", 1)
+                                        .set("playGeneration", std::move(playGeneration))
+                                        .set("operationId", identified ? operation : std::string{})
+                                        .set("phase", identified ? (state == "Play" ? "playing" : std::move(terminal))
+                                                                 : std::string{}));
     }
 
     void pump() {
@@ -455,7 +455,7 @@ TEST(EngineLuaDebugCoordinator, WireConfiguredChildSurvivesNativePauseBeforeGuiB
     ASSERT_TRUE(rig.host->workbench->debugController()->startTarget(target));
     ASSERT_TRUE(waitFor([&] { return rig.integration->nativeDebugBinding().has_value(); }));
     ASSERT_TRUE(rig.prepare());
-    ASSERT_TRUE(waitFor([&] { return native.argumentsOf("threads").size() >= 1; }));
+    ASSERT_TRUE(waitFor([&] { return !native.argumentsOf("threads").empty(); }));
     const auto nativeThreadRequests = native.argumentsOf("threads").size();
     native.sendEvent("stopped",
                      Json::object().set("reason", "pause").set("threadId", 1).set("allThreadsStopped", true));

@@ -37,7 +37,7 @@ using frost::diag::RetentionKind;
 using frost::diag::RetentionPolicy;
 using SystemTime = frost::IClock::SystemTime;
 
-const SystemTime kNow = SystemTime(std::chrono::sys_days(std::chrono::year(2026) / 11 / 1).time_since_epoch());
+constexpr SystemTime kNow = SystemTime(std::chrono::sys_days(std::chrono::year(2026) / 11 / 1).time_since_epoch());
 
 RetentionItem item(std::string path, std::uint64_t size, std::chrono::hours age, bool isProtected = false) {
     return {RetentionKind::Log, std::move(path), size, kNow - age, isProtected};

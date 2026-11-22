@@ -6,7 +6,7 @@
 #include <cstdio>
 
 #include <unistd.h>
-extern char** environ;
+extern char** environ; // NOLINT(readability-redundant-declaration): POSIX requires the declaration
 int main(int argc, char** argv) {
     using namespace frost::io;
     auto refuse = [](const char* message) {

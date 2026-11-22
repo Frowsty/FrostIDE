@@ -64,10 +64,10 @@ Result<ProcessSpec> prepareLinuxSandboxLaunch(const ProcessSpec& original) {
                       original.sandbox->network == SandboxNetwork::Deny ? "deny-network" : "internet-client"};
     for (const auto& grant : original.sandbox->paths) {
         spec.arguments.push_back(std::to_string(static_cast<unsigned>(grant.access)));
-        spec.arguments.push_back(grant.recursive ? "tree" : "exact");
+        spec.arguments.emplace_back(grant.recursive ? "tree" : "exact");
         spec.arguments.push_back(grant.path);
     }
-    spec.arguments.push_back("--");
+    spec.arguments.emplace_back("--");
     spec.arguments.push_back(original.executable);
     spec.arguments.insert(spec.arguments.end(), original.arguments.begin(), original.arguments.end());
     // The helper's loader must not receive attacker-selected preload/search modules before it can

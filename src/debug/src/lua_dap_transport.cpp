@@ -44,7 +44,7 @@ rpc::Json redact(const rpc::Json& value, std::string_view secret) {
 class LuaDapTransport final : public IDapTransport {
 public:
     LuaDapTransport(std::unique_ptr<io::LoopbackStream> stream, LuaDebugIdentity identity, std::string credential,
-                    LuaDebugAdmission admission, std::stop_token stop, std::int64_t lastServerSequence,
+                    LuaDebugAdmission admission, const std::stop_token& stop, std::int64_t lastServerSequence,
                     LuaDebugTransportCallbacks callbacks)
         : m_stream(std::move(stream)), m_identity(std::move(identity)), m_credential(std::move(credential)),
           m_admission(std::move(admission)), m_stop(stop), m_callbacks(std::move(callbacks)),
@@ -193,7 +193,7 @@ private:
 } // namespace
 std::unique_ptr<IDapTransport> makeLuaDapTransport(std::unique_ptr<io::LoopbackStream> stream,
                                                    LuaDebugIdentity identity, std::string credential,
-                                                   LuaDebugAdmission admission, std::stop_token stop,
+                                                   LuaDebugAdmission admission, const std::stop_token& stop,
                                                    std::int64_t lastServerSequence,
                                                    LuaDebugTransportCallbacks callbacks) {
     return std::make_unique<LuaDapTransport>(std::move(stream), std::move(identity), std::move(credential),

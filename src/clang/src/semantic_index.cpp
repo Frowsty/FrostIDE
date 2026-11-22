@@ -32,7 +32,7 @@ public:
         llvm::SmallString<128> buffer;
         if (clang::index::generateUSRForDecl(declaration, buffer))
             return {};
-        const auto usr = buffer.str().str();
+        auto usr = buffer.str().str();
         if (known.contains(usr))
             return usr;
         std::string name;

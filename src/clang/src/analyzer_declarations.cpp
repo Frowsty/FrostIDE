@@ -50,11 +50,13 @@ class Declarations final : public clang::RecursiveASTVisitor<Declarations> {
 
 public:
     explicit Declarations(AnalyzerResults& o) : output(o), context(o.context) {}
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool TraverseDecl(clang::Decl* d) {
         if (d && d->getLocation().isValid() && context.getSourceManager().isInSystemHeader(d->getLocation()))
             return true;
         return clang::RecursiveASTVisitor<Declarations>::TraverseDecl(d);
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitCXXMethodDecl(clang::CXXMethodDecl* method) {
         if (method->isImplicit() || method->overridden_methods().empty() || method->hasAttr<clang::OverrideAttr>() ||
             method->hasAttr<clang::FinalAttr>())
@@ -72,6 +74,7 @@ public:
                    "Overriding method has no override/final annotation.");
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitCXXRecordDecl(clang::CXXRecordDecl* record) {
         if (!record->isThisDeclarationADefinition() || record->isImplicit() || !record->isPolymorphic() ||
             record->hasAttr<clang::FinalAttr>())
@@ -83,6 +86,7 @@ public:
                 "Polymorphic non-final class has a public nonvirtual destructor; base-pointer deletion may be unsafe.");
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitReturnStmt(clang::ReturnStmt* statement) {
         const auto* expression = unwrap(statement->getRetValue());
         if (!expression)
@@ -124,6 +128,7 @@ public:
                        "Returned reference binds temporary storage that expires on return.");
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitCXXMemberCallExpr(clang::CXXMemberCallExpr* call) {
         const auto* method = call->getMethodDecl();
         const auto* function = owner(context, call);
@@ -136,6 +141,7 @@ public:
                        "more-derived override.");
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitCXXConstructExpr(clang::CXXConstructExpr* expression) {
         if (!expression->getConstructor()->isCopyConstructor() || !expression->getNumArgs())
             return true;
@@ -144,6 +150,7 @@ public:
                        "std::move of this const object selects the actual copy constructor, not a move constructor.");
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitCXXForRangeStmt(clang::CXXForRangeStmt* loop) {
         const auto* variable = loop->getLoopVariable();
         if (!variable || variable->getType()->isReferenceType())
@@ -156,6 +163,7 @@ public:
                        "independent copy is unnecessary.");
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitCXXCatchStmt(clang::CXXCatchStmt* handler) {
         const auto* variable = handler->getExceptionDecl();
         if (!variable || variable->getType()->isReferenceType())
@@ -166,6 +174,7 @@ public:
                        "Catching a polymorphic record by value can slice a derived exception.");
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitCXXThrowExpr(clang::CXXThrowExpr* expression) {
         const auto* function = owner(context, expression);
         if (!function)
@@ -189,6 +198,7 @@ public:
         }
         return true;
     }
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): CRTP RecursiveASTVisitor hook
     bool VisitSwitchStmt(clang::SwitchStmt* statement) {
         auto type = clean(statement->getCond())->getType();
         const auto* enumeration = type->getAs<clang::EnumType>();

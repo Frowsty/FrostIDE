@@ -53,7 +53,7 @@ public:
     // removes the new session and stops only sessions in this nonzero group.
     [[nodiscard]] Result<DebugSessionId> startTarget(const debug::DebugTarget& target, DebugGroupId group = 0);
     [[nodiscard]] Result<DebugSessionId> attachTarget(const debug::DebugTarget& target, debug::AdapterFactory factory,
-                                                      rpc::Json arguments, std::function<bool()> admission = {},
+                                                      rpc::Json arguments, const std::function<bool()>& admission = {},
                                                       DebugGroupId group = 0);
     [[nodiscard]] DebugGroupId createGroup();
     void finishPreparing(DebugGroupId group);

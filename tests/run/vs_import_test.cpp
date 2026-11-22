@@ -7,9 +7,9 @@
 namespace frost::run {
 namespace {
 #ifdef _WIN32
-const std::string root = "C:/import-workspace";
+constexpr std::string_view root = "C:/import-workspace";
 #else
-const std::string root = "/import-workspace";
+constexpr std::string_view root = "/import-workspace";
 #endif
 TEST(VisualStudioImport, LocalLaunchPreservesExactArgvEnvironmentAndCollisionFreeIds) {
     RunConfiguration existing;
@@ -27,7 +27,7 @@ TEST(VisualStudioImport, LocalLaunchPreservesExactArgvEnvironmentAndCollisionFre
     EXPECT_TRUE(result->skipped.empty());
     const auto& config = result->configurations.front();
     EXPECT_NE(config.id, existing.id);
-    const auto expectedProgram = io::normalizePath(root + "/bin/game");
+    const auto expectedProgram = io::normalizePath(std::string(root) + "/bin/game");
     ASSERT_TRUE(expectedProgram);
     EXPECT_EQ(config.program, *expectedProgram);
     EXPECT_EQ(config.arguments, (std::vector<std::string>{"--name", "two words", "$(never-executed)", ""}));

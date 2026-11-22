@@ -14,7 +14,7 @@ struct CMakeRenameCapture {
 // Full File API source input closure must be captured. Unsupported dynamic/indirect target
 // spelling refuses the whole plan. No source build semantics or target counts are invented.
 [[nodiscard]] Result<CMakeRenameCapture> planCMakeTargetRename(const CMakeLanguageInput& input, LspPosition position,
-                                                               std::string newName);
+                                                               const std::string& newName);
 // Syntax facts only; configured-target diagnostics explicitly refer to last configured graph.
 [[nodiscard]] Result<std::vector<SnapshotValidationIssue>> inspectCMakeSource(const text::Snapshot& source);
 } // namespace frost::lang

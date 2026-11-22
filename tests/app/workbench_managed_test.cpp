@@ -387,7 +387,7 @@ TEST(WorkbenchManaged, TrustAndUnsavedCrossProjectRenameReachEditors) {
     ASSERT_TRUE(rig.workbench->openPath(dir.join("Lib/Operations.cs")));
     auto* semanticView = rig.workbench->currentView();
     const auto choose = [&](std::size_t offset, QString title, std::function<void()> duringPreview = {},
-                            std::function<void()> beforeChoose = {}) {
+                            const std::function<void()>& beforeChoose = {}) {
         const bool ready = waitFor(
             [&] {
                 const auto* service = rig.workbench->managed();
@@ -641,12 +641,12 @@ TEST(WorkbenchManaged, UnityDiscoveryRefusesLinksAndNonRegularControlFiles) {
             dir.write(solution, "solution");
         const auto makeFifo = [&](const std::string& relative) {
             const std::string path = dir.join(relative);
-            EXPECT_TRUE(frost::io::realFileSystem().createDirectories(std::string(frost::io::parentPath(path))));
+            EXPECT_TRUE(frost::io::realFileSystem().createDirectories(frost::io::parentPath(path)));
             EXPECT_EQ(::mkfifo(path.c_str(), 0600), 0);
         };
         const auto makeLink = [&](const std::string& relative, const std::string& target) {
             const std::string path = dir.join(relative);
-            EXPECT_TRUE(frost::io::realFileSystem().createDirectories(std::string(frost::io::parentPath(path))));
+            EXPECT_TRUE(frost::io::realFileSystem().createDirectories(frost::io::parentPath(path)));
             std::error_code error;
             std::filesystem::create_symlink(dir.join(target), path, error);
             EXPECT_FALSE(error) << error.message();

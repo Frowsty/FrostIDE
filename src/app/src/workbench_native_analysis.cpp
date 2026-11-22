@@ -73,8 +73,8 @@ sched::Task<void> admitCoverageSource(io::IFileSystem* fs, run::AnalysisFileIden
     co_return;
 }
 } // namespace
-void Workbench::prepareNativeAnalysis(const run::RunConfiguration& configuration, std::stop_token stop,
-                                      std::function<void(Result<run::LaunchPlan>)> done) {
+void Workbench::prepareNativeAnalysis(const run::RunConfiguration& configuration, const std::stop_token& stop,
+                                      const std::function<void(Result<run::LaunchPlan>)>& done) {
     const QPointer<Workbench> self(this);
     const auto root = m_projectRoot;
     const auto revision = m_services.trust.snapshot(root).revision;
@@ -209,7 +209,7 @@ void Workbench::prepareNativeAnalysis(const run::RunConfiguration& configuration
                     },
                     Qt::QueuedConnection);
         };
-        auto accepted = m_runService->debug(*project, std::move(handlers));
+        auto accepted = m_runService->debug(project, std::move(handlers));
         if (!accepted) {
             done(std::unexpected(accepted.error()));
             return;

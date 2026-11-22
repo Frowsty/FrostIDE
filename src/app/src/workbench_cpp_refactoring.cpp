@@ -124,7 +124,7 @@ QString display(std::string_view value) {
 }
 } // namespace
 
-void Workbench::prepareCppRefactoring(lang::CppRefactoringRequest request, std::stop_token cancel,
+void Workbench::prepareCppRefactoring(lang::CppRefactoringRequest request, const std::stop_token& cancel,
                                       std::function<void(Result<document::RefactoringPlan>)> done) {
     m_cppRenameStop.request_stop();
     m_cppRenameStop = std::stop_source{};
@@ -296,7 +296,7 @@ void Workbench::registerCppRefactoringActions() {
     }
 }
 
-void Workbench::showCppRefactoring(std::string operation) {
+void Workbench::showCppRefactoring(const std::string& operation) {
     if (operation == "fix-in-scope") {
         showCppInspectionScopeFixes();
         return;

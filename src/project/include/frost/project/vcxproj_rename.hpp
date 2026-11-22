@@ -53,6 +53,6 @@ struct VcxprojRenamePlan {
 // caller's single RefactoringPlan, never the helper's independent commit/journal path.
 [[nodiscard]] Result<VcxprojRenamePlan>
 planVcxprojRenameWithHost(io::IProcessLauncher& launcher, const ProjectEditLaunch& launch, const ProjectEdit& edit,
-                          std::span<const VcxprojRenameInput> inputs, std::stop_token stop = {});
+                          std::span<const VcxprojRenameInput> inputs, const std::stop_token& stop = {});
 
 } // namespace frost::project

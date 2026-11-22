@@ -26,6 +26,13 @@ Result<void> Workbench::ensureRefactoringCoordinator(const std::string& target) 
         return fail(ErrorCode::Cancelled, "The workbench is shutting down");
     if (!m_refactoring) {
         std::string preferred = m_options.refactoringStateDirectory;
+        if (preferred.empty() && !m_options.journalDirectory.empty()) {
+            const auto journalParent = io::parentPath(m_options.journalDirectory);
+            if (!journalParent.empty()) {
+                if (auto sibling = io::joinPath(journalParent, "refactoring"))
+                    preferred = std::move(*sibling);
+            }
+        }
         if (preferred.empty()) {
             const auto data = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
             if (data.isEmpty())

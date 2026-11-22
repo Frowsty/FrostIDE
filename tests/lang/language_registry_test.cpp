@@ -42,7 +42,9 @@ Json definition() {
 std::string manifest(Json d) {
     return Json::object().set("version", 1).set("servers", Json::array({std::move(d)})).dump();
 }
-std::string frame(std::string body) { return "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body; }
+std::string frame(const std::string& body) {
+    return "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body;
+}
 TEST(LanguageRegistry, LuauIsAnExplicitIndependentLanguageAndNeverOverridesLuaJitLuaFiles) {
     auto row = definition();
     row.set("id", "luau")
@@ -114,7 +116,7 @@ TEST(LanguageRegistry, LaunchRefusesChangedPinsRevokedThenRegrantedTrustAndUnrev
     spec.arguments = d.arguments;
     spec.workingDirectory = root() + "/workspace";
     auto changed = spec;
-    changed.arguments.push_back("--foreign");
+    changed.arguments.emplace_back("--foreign");
     EXPECT_FALSE(guarded.launch(changed));
     EXPECT_TRUE(actual.launches().empty());
     ASSERT_TRUE(fs.writeFileAtomic(root() + "/server", "changed"));
@@ -193,7 +195,7 @@ TEST(LanguageRegistry, RequestBoundaryRejectsExternalDocumentsAndRevokedDelayedT
         Json::array(
             {Json::object().set("kind", "delete").set("uri", pathToUri(root() + "/workspace/local.py").value())}));
     EXPECT_FALSE(admission->admitEdit(resource));
-    auto params = [](std::string path) {
+    auto params = [](std::string_view path) {
         return Json::object().set("textDocument", Json::object().set("uri", pathToUri(path).value()));
     };
     auto denied = sched::syncWait(requester.request("textDocument/hover", params(root() + "/external.py")));

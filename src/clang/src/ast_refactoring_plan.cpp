@@ -24,7 +24,7 @@ projectAST(const clang::tooling::CompileCommand& command, llvm::IntrusiveRefCntP
            const std::map<std::string, std::string>& changes, DiagnosticSink& diagnostics, bool recovery = false) {
     ProjectCommand database(command);
     std::vector<std::string> files{command.Filename};
-    clang::tooling::ClangTool tool(database, files, std::make_shared<clang::PCHContainerOperations>(), fs);
+    clang::tooling::ClangTool tool(database, files, std::make_shared<clang::PCHContainerOperations>(), std::move(fs));
     tool.setDiagnosticConsumer(&diagnostics);
     tool.appendArgumentsAdjuster(clang::tooling::getClangStripDependencyFileAdjuster());
     for (const auto& [path, bytes] : changes)

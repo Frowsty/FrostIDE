@@ -18,6 +18,7 @@
 
 #include <chrono>
 #include <format>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -479,8 +480,8 @@ text::Snapshot snapshotOf(std::string text) {
 }
 
 std::string applied(std::string text, const std::vector<SaveEdit>& edits) {
-    for (auto edit = edits.rbegin(); edit != edits.rend(); ++edit)
-        text.replace(edit->range.begin.value(), edit->range.size(), edit->text);
+    for (const auto& edit : std::views::reverse(edits))
+        text.replace(edit.range.begin.value(), edit.range.size(), edit.text);
     return text;
 }
 

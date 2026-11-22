@@ -14,9 +14,10 @@ TEST(SemanticPreprocessor, ExpandedSourceEqualsPinnedClangEAndRetainsActualEvent
     frost::test::ScratchDir scratch("semantic-preprocess");
     auto& fs = frost::io::realFileSystem();
     const auto source = scratch.join("unit.cpp"), header = scratch.join("settings.hpp");
-    auto backingHeader = header;
-#ifndef _WIN32
-    backingHeader = scratch.join("settings-source.hpp");
+#ifdef _WIN32
+    const auto& backingHeader = header;
+#else
+    const auto backingHeader = scratch.join("settings-source.hpp");
     std::error_code linkError;
     std::filesystem::create_symlink(backingHeader, header, linkError);
     ASSERT_FALSE(linkError) << linkError.message();
